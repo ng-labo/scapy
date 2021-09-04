@@ -1136,6 +1136,7 @@ Field naming convention
 -----------------------
 The goal is to keep the writing of packets fluent and intuitive. The basic instructions are the following :
 
+* Do not use ``name``` as a field name, as it is reserved for Scapy internals
 * Use inverted camel case and common abbreviations (e.g. len, src, dst, dstPort, srcIp).
 * Wherever it is either possible or relevant, prefer using the names from the specifications. This aims to help newcomers to easily forge packets.
 
