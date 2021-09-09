@@ -21,7 +21,7 @@ from scapy.fields import (
     IPField,
     IntField,
     IntEnumField,
-    #LongField,
+    LongField,
     MACField,
     MultipleTypeField,
     PacketField,
@@ -54,17 +54,17 @@ class SflowCounter1(Packet):
     name = "SFLCOUNTERS_GENERIC"
     fields_desc = [ IntField("ifIndex", 0),
                     IntField("networkType", 0),
-                    IntField("ifSpeed", 0),
+                    LongField("ifSpeed", 0),
                     IntField("ifDirection", 0),
                     IntField("ifStatus", 0),
-                    IntField("ifInOctets", 0),
+                    LongField("ifInOctets", 0),
                     IntField("ifInUcastPkts", 0),
                     IntField("ifInMulticastPkts", 0),
                     IntField("ifInBroadcastPkts", 0),
                     IntField("ifInDiscards", 0),
                     IntField("ifInErrors", 0),
                     IntField("ifInUnknownProtos", 0),
-                    IntField("ifOutOctets", 0),
+                    LongField("ifOutOctets", 0),
                     IntField("ifOutUcastPkts", 0),
                     IntField("ifOutMulticastPkts", 0),
                     IntField("ifOutBroadcastPkts", 0),
@@ -118,10 +118,10 @@ class SflowCounterList(Packet):
     name = "Counter List"
     fields_desc = [ IntField("tag", 0),
                     IntField("length", 0),
-                    ConditionalField(PacketListField("tag1", None,  SflowCounter1), lambda pkt:pkt.tag==1),
-                    ConditionalField(PacketListField("tag2", None,  SflowCounter2), lambda pkt:pkt.tag==2),
-                    ConditionalField(PacketListField("tag1005", None,  SflowCounter1005), lambda pkt:pkt.tag==1005),
-                    ConditionalField(PacketListField("tag2001", None,  SflowCounter2001), lambda pkt:pkt.tag==2001)
+                    ConditionalField(PacketField("tag1", None, SflowCounter1), lambda pkt:pkt.tag==1),
+                    ConditionalField(PacketField("tag2", None, SflowCounter2), lambda pkt:pkt.tag==2),
+                    ConditionalField(PacketField("tag1005", None, SflowCounter1005), lambda pkt:pkt.tag==1005),
+                    ConditionalField(PacketField("tag2001", None, SflowCounter2001), lambda pkt:pkt.tag==2001)
                   ]
     def extract_padding(self, p):
         return "", p
