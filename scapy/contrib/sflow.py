@@ -10,13 +10,12 @@ from scapy.config import conf
 from scapy.data import IP_PROTOS
 from scapy.error import warning, Scapy_Exception
 from scapy.fields import (
-    #BitEnumField,
-    #BitField,
     #ByteEnumField,
-    #ByteField,
+    ByteField,
     ConditionalField,
     Field,
     FieldLenField,
+    FieldListField,
     #FlagsField,
     IPField,
     IntField,
@@ -28,8 +27,9 @@ from scapy.fields import (
     PacketListField,
     #SecondsIntField,
     #ShortEnumField,
-    #ShortField,
+    ShortField,
     StrField,
+    StrLenField,
     StrFixedLenField,
     #StrLenField,
     #ThreeBytesField,
@@ -39,11 +39,9 @@ from scapy.fields import (
 )
 from scapy.packet import Packet, bind_layers, bind_bottom_up
 from scapy.plist import PacketList
-from scapy.sessions import IPSession, DefaultSession
+#from scapy.sessions import IPSession, DefaultSession
 
-from scapy.layers.inet import Ether
-from scapy.layers.inet import IP
-from scapy.layers.inet import UDP
+from scapy.layers.inet import Ether, IP, UDP
 from scapy.layers.inet6 import IP6Field
 
 ###########################################
@@ -103,31 +101,232 @@ class SflowCounter1005(Packet):
         return "", p
 
 
+class SflowCounter2000(Packet):
+    name = "SFLCOUNTERS_HOST_HID"
+    fields_desc = [ IntField("hostlen", 0),
+                    StrFixedLenField("hostname", "", length=8),
+                    LongField("uuid1", 0),
+                    LongField("uuid2", 0),
+                    IntField("machine_type", 0),
+                    IntField("os_name", 0),
+                    IntField("orlen", 0),
+                    StrFixedLenField("os_release", "", length_from=lambda pkt:pkt.orlen),
+                  ]
+    def extract_padding(self, p):
+        return "", p
+
+
+class SflowMACs(Packet):
+    name = "SFLCOUNTERS_MACS"
+    fields_desc = [ IntField("ifindex", 0),
+                    IntField("numMacs", 0),
+                    StrFixedLenField("MAC", "", length_from=lambda pkt:pkt.numMacs*8)
+                  ]
+    def extract_padding(self, p):
+        return "", p
+
+
 class SflowCounter2001(Packet):
     name = "SFLCOUNTERS_ADAPTORS"
     fields_desc = [ IntField("num_adp", 0),
-                    IntField("ifindex", 0),
-                    IntField("numMacs", 0),
-                    MACField("MACs", None),
-                      ]
+                    PacketListField("Macs", None, SflowMACs, count_from=lambda pkt:pkt.num_adp)
+                  ]
+    def extract_padding(self, p):
+        return "", p
+
+
+class SflowCounter2003(Packet):
+    name = "SFLCOUNTERS_HOST_CPU"
+    fields_desc = [ IntField("cpu_load_one", 0),
+                    IntField("cpu_load_five", 0),
+                    IntField("cpu_load_fifteen", 0),
+                    IntField("cpu_proc_run", 0),
+                    IntField("cpu_proc_total", 0),
+                    IntField("cpu_num", 0),
+                    IntField("cpu_speed", 0),
+                    IntField("cpu_uptime", 0),
+                    IntField("cpu_user", 0),
+                    IntField("cpu_nice", 0),
+                    IntField("cpu_system", 0),
+                    IntField("cpu_idle", 0),
+                    IntField("cpu_wio", 0),
+                    IntField("cpuintr", 0),
+                    IntField("cpu_sintr", 0),
+                    IntField("cpuinterrupts", 0),
+                    IntField("cpu_contexts", 0),
+                    IntField("cpu_steal", 0),
+                    IntField("cpu_guest", 0),
+                    IntField("cpu_guest_nice", 0),
+                  ]
+    def extract_padding(self, p):
+        return "", p
+
+class SflowCounter2004(Packet):
+    name = "SFLCOUNTERS_HOST_MEM"
+    fields_desc = [ LongField("mem_total", 0),
+                    LongField("mem_free", 0),
+                    LongField("mem_shared", 0),
+                    LongField("mem_buffers", 0),
+                    LongField("mem_cached", 0),
+                    LongField("swap_total", 0),
+                    LongField("swap_free", 0),
+                    IntField("page_in", 0),
+                    IntField("page_out", 0),
+                    IntField("swap_in", 0),
+                    IntField("swap_out", 0),
+                  ]
+    def extract_padding(self, p):
+        return "", p
+
+
+class SflowCounter2005(Packet):
+    name = "SFLCOUNTERS_HOST_DSK"
+    fields_desc = [ LongField("disk_total", 0),
+                    LongField("disk_free", 0),
+                    IntField("disk_partition_max_used", 0),
+                    IntField("disk_reads", 0),
+                    LongField("disk_bytes_read", 0),
+                    IntField("disk_read_time", 0),
+                    IntField("disk_writes", 0),
+                    LongField("disk_bytes_written", 0),
+                    IntField("disk_write_time", 0),
+                  ]
+    def extract_padding(self, p):
+        return "", p
+
+
+class SflowCounter2006(Packet):
+    name = "SFLCOUNTERS_HOST_NIO"
+    fields_desc = [
+                    LongField("nio_bytes_in", 0),
+                    IntField("nio_pkts_in", 0),
+                    IntField("nio_errs_in", 0),
+                    IntField("nio_drops_in", 0),
+                    LongField("nio_bytes_out", 0),
+                    IntField("nio_pkts_out", 0),
+                    IntField("nio_errs_out", 0),
+                    IntField("nio_drops_out", 0),
+                  ]
+    def extract_padding(self, p):
+        return "", p
+
+
+class SflowCounter2007(Packet):
+    name = "SFLCOUNTERS_HOST_IP"
+    fields_desc = [ IntField("ipForwarding" ,0),
+                    IntField("ipDefaultTTL" ,0),
+                    IntField("ipInReceives" ,0),
+                    IntField("ipInHdrErrors" ,0),
+                    IntField("ipInAddrErrors" ,0),
+                    IntField("ipForwDatagrams" ,0),
+                    IntField("ipInUnknownProtos" ,0),
+                    IntField("ipInDiscards" ,0),
+                    IntField("ipInDelivers" ,0),
+                    IntField("ipOutRequests" ,0),
+                    IntField("ipOutDiscards" ,0),
+                    IntField("ipOutNoRoutes" ,0),
+                    IntField("ipReasmTimeout" ,0),
+                    IntField("ipReasmReqds" ,0),
+                    IntField("ipReasmOKs" ,0),
+                    IntField("ipReasmFails" ,0),
+                    IntField("ipFragOKs" ,0),
+                    IntField("ipFragFails" ,0),
+                    IntField("ipFragCreates" ,0),
+                   ]
+    def extract_padding(self, p):
+        return "", p
+
+
+class SflowCounter2008(Packet):
+    name = "SFLCOUNTERS_HOST_ICMP"
+    fields_desc = [ IntField("icmpInMsgs" ,0),
+                    IntField("icmpInErrors" ,0),
+                    IntField("icmpInDestUnreachs" ,0),
+                    IntField("icmpInTimeExcds" ,0),
+                    IntField("icmpInParamProbs" ,0),
+                    IntField("icmpInSrcQuenchs" ,0),
+                    IntField("icmpInRedirects" ,0),
+                    IntField("icmpInEchos" ,0),
+                    IntField("icmpInEchoReps" ,0),
+                    IntField("icmpInTimestamps" ,0),
+                    IntField("icmpInAddrMasks" ,0),
+                    IntField("icmpInAddrMaskReps" ,0),
+                    IntField("icmpOutMsgs" ,0),
+                    IntField("icmpOutErrors" ,0),
+                    IntField("icmpOutDestUnreachs" ,0),
+                    IntField("icmpOutTimeExcds" ,0),
+                    IntField("icmpOutParamProbs" ,0),
+                    IntField("icmpOutSrcQuenchs" ,0),
+                    IntField("icmpOutRedirects" ,0),
+                    IntField("icmpOutEchos" ,0),
+                    IntField("icmpOutEchoReps" ,0),
+                    IntField("icmpOutTimestamps" ,0),
+                    IntField("icmpOutTimestampReps" ,0),
+                    IntField("icmpOutAddrMasks" ,0),
+                    IntField("icmpOutAddrMaskReps" ,0), ]
+    def extract_padding(self, p):
+        return "", p
+
+class SflowCounter2009(Packet):
+    name = "SFLCOUNTERS_HOST_TCP"
+    fields_desc = [ IntField("tcpRtoAlgorithm", 0),
+                    IntField("tcpRtoMin", 0),
+                    IntField("tcpRtoMax", 0),
+                    IntField("tcpMaxConn", 0),
+                    IntField("tcpActiveOpens", 0),
+                    IntField("tcpPassiveOpens", 0),
+                    IntField("tcpAttemptFails", 0),
+                    IntField("tcpEstabResets", 0),
+                    IntField("tcpCurrEstab", 0),
+                    IntField("tcpInSegs", 0),
+                    IntField("tcpOutSegs", 0),
+                    IntField("tcpRetransSegs", 0),
+                    IntField("tcpInErrs", 0),
+                    IntField("tcpOutRst", 0),
+                    IntField("tcpInCsumErrors", 0),
+                  ]
+    def extract_padding(self, p):
+        return "", p
+
+
+class SflowCounter2010(Packet):
+    name = "SFLCOUNTERS_HOST_UDP"
+    fields_desc = [ IntField("udpInDatagrams", 0),
+                    IntField("udpNoPorts", 0),
+                    IntField("udpInErrors", 0),
+                    IntField("udpOutDatagrams", 0),
+                    IntField("udpRcvbufErrors", 0),
+                    IntField("udpSndbufErrors", 0),
+                    IntField("udpInCsumErrors", 0),
+                  ]
     def extract_padding(self, p):
         return "", p
 
 
 class SflowCounterList(Packet):
-    name = "Counter List"
+    name = "Counter Item"
     fields_desc = [ IntField("tag", 0),
                     IntField("length", 0),
                     ConditionalField(PacketField("tag1", None, SflowCounter1), lambda pkt:pkt.tag==1),
                     ConditionalField(PacketField("tag2", None, SflowCounter2), lambda pkt:pkt.tag==2),
                     ConditionalField(PacketField("tag1005", None, SflowCounter1005), lambda pkt:pkt.tag==1005),
-                    ConditionalField(PacketField("tag2001", None, SflowCounter2001), lambda pkt:pkt.tag==2001)
+                    ConditionalField(PacketField("tag2000", None, SflowCounter2000), lambda pkt:pkt.tag==2000),
+                    ConditionalField(PacketField("tag2001", None, SflowCounter2001), lambda pkt:pkt.tag==2001),
+                    ConditionalField(PacketField("tag2003", None, SflowCounter2003), lambda pkt:pkt.tag==2003),
+                    ConditionalField(PacketField("tag2004", None, SflowCounter2004), lambda pkt:pkt.tag==2004),
+                    ConditionalField(PacketField("tag2005", None, SflowCounter2005), lambda pkt:pkt.tag==2005),
+                    ConditionalField(PacketField("tag2006", None, SflowCounter2006), lambda pkt:pkt.tag==2006),
+                    ConditionalField(PacketField("tag2007", None, SflowCounter2007), lambda pkt:pkt.tag==2007),
+                    ConditionalField(PacketField("tag2008", None, SflowCounter2008), lambda pkt:pkt.tag==2008),
+                    ConditionalField(PacketField("tag2009", None, SflowCounter2009), lambda pkt:pkt.tag==2009),
+                    ConditionalField(PacketField("tag2010", None, SflowCounter2010), lambda pkt:pkt.tag==2010),
                   ]
     def extract_padding(self, p):
         return "", p
 
+
 class SflowCounter(Packet):
-    name = "Counter"
+    name = "Counter Header"
     fields_desc = [ IntField("length", 0),
                     IntField("generated", 0),
                     IntField("samplerId", 0),
@@ -167,8 +366,8 @@ class SflowFlowExrouter(Packet):
 class DstAsPath(Packet):
     name = "DstAsPath"
     fields_desc = [ IntEnumField("type", 1, {1:"SET", 2:"SEQUENCE"}),
-                    IntField("seglen", 0),
-                    StrFixedLenField("dstAsPath", "", length_from=lambda pkt:pkt.seglen*4),
+                    IntField("asLen", 0),
+                    FieldListField("dstAsPath", [], IntField("", 0), count_from=lambda pkt:pkt.asLen),
                   ]
     def extract_padding(self, p):
         return "", p
@@ -179,34 +378,39 @@ class SflowFlowExgateway(Packet):
     name = "SFL_EXGATEWAY"
     fields_desc = [ IntEnumField("addrType", 1, {1:"v4", 2:"v6"}),
                     MultipleTypeField(
-                      [(IPField("bgp_nextHop", "0.0.0.0"), lambda pkt:pkt.addrType==1),
-                       (IP6Field("bgp_nextHop", "::"), lambda pkt:pkt.addrType==2),], StrField("bgp_nextHop", "")),
+                          [(IPField("bgp_nextHop", "0.0.0.0"), lambda pkt:pkt.addrType==1),
+                           (IP6Field("bgp_nextHop", "::"), lambda pkt:pkt.addrType==2),
+                          ], StrField("bgp_nextHop", "")),
                     IntField("myAS", 0),
                     IntField("srcAS", 0),
                     IntField("srcPeerAS", 0),
-                    IntField("segments", 0),
-                    PacketListField("dstAsPath", None, DstAsPath, count_from=lambda pkt:pkt.segments),
+                    IntField("asLen", 0),
+                    PacketListField("dstAsPath", None, DstAsPath, count_from=lambda pkt:pkt.asLen),
                     IntField("communitiesLen", 0),
-                    StrFixedLenField("communities", "", length_from=lambda pkt:pkt.communitiesLen*4),
+                    FieldListField("communities", [], IntField("", 0), count_from=lambda pkt:pkt.communitiesLen),
                     IntField("bgp_localPref", 0),
                   ]
     def extract_padding(self, p):
         return "", p
 
 
+"""
 class SflowFlowEthernet(Packet):
     name = "SFL_ETHERNET"
     fields_desc = [ IntField("ethLen", 0),
-                    MACField("eth_src", None),
-                    MACField("eth_dst", None),
+                    MACField("eth_src", "00:00:00:00:00:00"),
+                    MACField("eth_dst", "00:00:00:00:00:00"),
                     IntField("eth_type", 0)
                   ]
     def extract_padding(self, p):
         return "", p
+"""
 
 
 class SflowFlowHeader(Packet):
     name = "SFL_HEADER"
+    # XXX SFLHEADER_ETHERNET_ISO8023 only
+    #     parsing would break in other headerProtocol
     fields_desc = [ IntField("headerProtocol", 0),
                     IntField("sampledPacketSize", 0),
                     IntField("strippedBytes", 0),
@@ -216,29 +420,38 @@ class SflowFlowHeader(Packet):
     def extract_padding(self, p):
         return "", p
 
-class SflowFlowElement(Packet):
-    name = "FlowElement"
+
+class SflowElement(Packet):
+    name = "Element"
     fields_desc = [ IntField("elementType", 0),
-                    FieldLenField("fieldLen", None, fmt='I', length_of="flowHeader"),
+                    FieldLenField("fieldLen", None, fmt='I'),
                     ConditionalField(
-                        PacketListField("flowHeader", None, SflowFlowHeader, length_from=lambda pkt:pkt.fieldLen), lambda pkt:pkt.elementType==1),
+                        PacketListField("flowHeader", None, SflowFlowHeader, length_from=lambda pkt:pkt.fieldLen),
+                        lambda pkt:pkt.elementType==1),
+                    #ConditionalField(
+                    #    PacketListField("flowEthernet", None, SflowFlowEthernet, length_from=lambda pkt:pkt.fieldLen),
+                    #    lambda pkt:pkt.elementType==2),
                     ConditionalField(
-                        PacketListField("flowEthernet", None, SflowFlowEthernet, length_from=lambda pkt:pkt.fieldLen), lambda pkt:pkt.elementType==2),
+                        PacketListField("flowExSwitch", None, SflowFlowExswitch, length_from=lambda pkt:pkt.fieldLen),
+                        lambda pkt:pkt.elementType==1001),
                     ConditionalField(
-                        PacketListField("flowExSwitch", None, SflowFlowExswitch, length_from=lambda pkt:pkt.fieldLen), lambda pkt:pkt.elementType==1001),
+                        PacketListField("flowExRouter", None, SflowFlowExrouter, length_from=lambda pkt:pkt.fieldLen),
+                        lambda pkt:pkt.elementType==1002),
                     ConditionalField(
-                        PacketListField("flowExRouter", None, SflowFlowExrouter, length_from=lambda pkt:pkt.fieldLen), lambda pkt:pkt.elementType==1002),
+                        PacketListField("flowExGateway", None, SflowFlowExgateway, length_from=lambda pkt:pkt.fieldLen),
+                        lambda pkt:pkt.elementType==1003),
+                    # not yet implemented types in this contribution
                     ConditionalField(
-                        PacketListField("flowExGateway", None, SflowFlowExgateway, length_from=lambda pkt:pkt.fieldLen), lambda pkt:pkt.elementType==1003),
-                    ConditionalField(
-                        StrFixedLenField("flowDummy", "", length_from=lambda pkt:pkt.fieldLen), lambda pkt:pkt.elementType not in (1, 2, 1001, 1002, 1003)),
+                        StrFixedLenField("flowDummy", "", length_from=lambda pkt:pkt.fieldLen),
+                        lambda pkt:pkt.elementType not in (1, 1001, 1002, 1003)),
                   ]
     def extract_padding(self, p):
         return "", p
 
+
 class SflowFlow(Packet):
     name = "Flow"
-    fields_desc = [ FieldLenField("length", None, fmt='I', length_of="flowElement"),
+    fields_desc = [ FieldLenField("length", None, fmt='I', length_of="element"),
                     IntField("generated", 0),
                     IntField("samplerId", 0),
                     IntField("meanSkipCount", 0),
@@ -246,15 +459,16 @@ class SflowFlow(Packet):
                     IntField("dropEvents", 0),
                     IntField("inputPort", 0),
                     IntField("outputPort", 0),
-                    FieldLenField("numElements", None, fmt='I', count_of="flowElement"),
-                    PacketListField("flowElement", None, SflowFlowElement, count_from=lambda pkt:pkt.numElements),
+                    FieldLenField("numElements", None, fmt='I', count_of="element"),
+                    PacketListField("element", None, SflowElement, count_from=lambda pkt:pkt.numElements),
                   ]
     def extract_padding(self, p):
         return "", p
 
+
 class SflowSample(Packet):
     name = "Sflow Sample"
-    fields_desc = [ IntEnumField("type", 1, {1:"flowsample", 2:"counter-sample", 3:"flow-sample-ex"}),
+    fields_desc = [ IntEnumField("type", 1, {1:"flow", 2:"counter"}),
                     ConditionalField(
                         PacketField("flow", None, SflowFlow), lambda pkt:pkt.type==1),
                     ConditionalField(
@@ -263,21 +477,23 @@ class SflowSample(Packet):
     def extract_padding(self, p):
         return "", p
 
-class SflowPacket(Packet):
-    name = "Sflow Packet"
+
+class SflowDatagram(Packet):
+    name = "Sflow Datagram"
     fields_desc = [ IntField("datagramVersion", 5),
                     IntField("addressType", 1),
                     IPField("agent", "0.0.0.0"),
                     IntField("agentSubId", 0),
                     IntField("sequenceNo", 0),
                     IntField("sysUpTime", 0),
-                    FieldLenField("inPacket", None, fmt="I", count_of="flowSample"),
-                    PacketListField("flowSample", None, SflowSample, count_from=lambda pkt:pkt.inPacket)
+                    FieldLenField("inPacket", None, fmt="I", count_of="sflowSample"),
+                    PacketListField("sflowSample", None, SflowSample, count_from=lambda pkt:pkt.inPacket)
                   ]
 
 
 for port in [6343, 6348]:  # Standard SFlow ports
-    bind_bottom_up(UDP, SflowPacket, dport=port)
-    bind_bottom_up(UDP, SflowPacket, sport=port)
-bind_layers(UDP, SflowPacket, dport=6348, sport=6348)
+    bind_bottom_up(UDP, SflowDatagram, dport=port)
+    bind_bottom_up(UDP, SflowDatagram, sport=port)
+bind_layers(UDP, SflowDatagram, dport=6348, sport=6348)
 
+# end of file
