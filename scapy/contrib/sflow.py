@@ -3,6 +3,30 @@
 # Copyright (C) Philippe Biondi <phil@secdev.org>
 # This program is published under a GPLv2 license
 
+"""
+ sflow
+
+ some specifications of sflow(verrion5) is implemented.
+
+ - version : 5
+ - header_protocol : ETHERNET-ISO88023
+ - flow element types : flow-header
+                        extented switch
+                        extented router
+                        extented gateway
+ - counter tags :
+
+ pkts = sniff(offline=open('captured-slow.pcap', 'rb'))
+
+ sFlowRcvrPort default value is 6343, SflowDatagram is binded to udp in 6343 port
+
+
+ SflowDatagram
+   flow-sample
+   flow-counter
+
+"""
+
 from scapy.fields import (
     ConditionalField,
     FieldLenField,
@@ -13,18 +37,15 @@ from scapy.fields import (
     LongField,
     MultipleTypeField,
     PacketField,
+    PacketLenField,
     PacketListField,
     StrField,
     StrFixedLenField,
 )
 from scapy.packet import Packet, bind_layers
 
-from scapy.layers.inet import UDP  # Ether, IP
+from scapy.layers.inet import UDP, Ether, IP
 from scapy.layers.inet6 import IP6Field
-
-"""
- Sflow Version 5
-"""
 
 
 class SflowCounter1(Packet):
@@ -425,16 +446,18 @@ class SflowFlowHeader(Packet):
     fields_desc = [IntField("headerProtocol", 0),
                    IntField("sampledPacketSize", 0),
                    IntField("strippedBytes", 0),
+                   #FieldLenField("headerLen", None, fmt='I', length_of="ether"),
+                   #PacketLenField("ether", None, Ether,
+                   #     length_from=lambda pkt: pkt.headerLen), ]
                    FieldLenField("headerLen",
                                  None, fmt='I',
                                  length_of="header"),
-                   FieldListField("header", None,
-                                  StrFixedLenField,
-                                  length_from=lambda pkt: pkt.headerLen), ]
+                   StrFixedLenField("header", None,
+                                    length_from=lambda pkt: int((pkt.headerLen+3)/4)*4),]
 
     """ replace in last 2 items if hope to decode this sample header
     FieldLenField("headerLen", None, fmt='I', length_of="ether"),
-    PacketListField("ether", None, Ether,
+    PacketLenField("ether", None, Ether,
                     length_from=lambda pkt: pkt.headerLen)
     """
 
@@ -445,26 +468,25 @@ class SflowFlowHeader(Packet):
 class SflowElement(Packet):
     name = "Element"
     # implemented element-types
-    _t = (1, 1001, 1002, 1003)
     fields_desc = [IntField("elementType", 0),
                    FieldLenField("fieldLen", None, fmt='I'),
                    ConditionalField(
-                       PacketListField("flowHeader", None,
+                       PacketLenField("flowHeader", None,
                                        SflowFlowHeader,
                                        length_from=lambda pkt: pkt.fieldLen),
                        lambda pkt: pkt.elementType == 1),
                    ConditionalField(
-                       PacketListField("flowExSwitch", None,
+                       PacketLenField("flowExSwitch", None,
                                        SflowFlowExswitch,
                                        length_from=lambda pkt: pkt.fieldLen),
                        lambda pkt: pkt.elementType == 1001),
                    ConditionalField(
-                       PacketListField("flowExRouter", None,
+                       PacketLenField("flowExRouter", None,
                                        SflowFlowExrouter,
                                        length_from=lambda pkt: pkt.fieldLen),
                        lambda pkt: pkt.elementType == 1002),
                    ConditionalField(
-                       PacketListField("flowExGateway", None,
+                       PacketLenField("flowExGateway", None,
                                        SflowFlowExgateway,
                                        length_from=lambda pkt: pkt.fieldLen),
                        lambda pkt: pkt.elementType == 1003),
@@ -472,7 +494,7 @@ class SflowElement(Packet):
                    ConditionalField(
                        StrFixedLenField("flowRecord", "",
                                         length_from=lambda pkt: pkt.fieldLen),
-                       lambda pkt: pkt.elementType not in _t), ]
+                       lambda pkt: pkt.elementType not in (1, 1001, 1002, 1003)),]
 
     def extract_padding(self, p):
         return "", p
@@ -511,6 +533,10 @@ class SflowSample(Packet):
 
     def extract_padding(self, p):
         return "", p
+    
+    def mysummary(self):
+        # type: () -> str
+        return self.sprintf("type %type%") 
 
 
 class SflowDatagram(Packet):
@@ -526,8 +552,21 @@ class SflowDatagram(Packet):
                    PacketListField("sflowSample", None,
                                    SflowSample,
                                    count_from=lambda pkt: pkt.inPacket), ]
+    """
+    def answers(self, other):
+        # type: (Packet) -> int
+        if isinstance(other, Ether):
+            if self.type == other.type:
+                return self.payload.answers(other.payload)
+        return 0
+    """
+
+    def mysummary(self):
+        # type: () -> str
+        return self.sprintf("sflow %agent%(%inPacket%):") 
 
 
 bind_layers(UDP, SflowDatagram, dport=6343)
+#bind_layers(SflowDatagram, SflowSample)
 
 # end of file
