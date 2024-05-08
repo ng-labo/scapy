@@ -1,10 +1,7 @@
-# -*- mode: python3; indent-tabs-mode: nil; tab-width: 4 -*-
-# altbeacon.py - protocol handlers for AltBeacon
-#
+# SPDX-License-Identifier: GPL-2.0-or-later
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Michael Farrell <micolous+git@gmail.com>
-# This program is published under a GPLv2 (or later) license
 #
 # scapy.contrib.description = AltBeacon BLE proximity beacon
 # scapy.contrib.status = loads
@@ -14,8 +11,13 @@ scapy.contrib.altbeacon - AltBeacon Bluetooth LE proximity beacons.
 The AltBeacon specification can be found at: https://github.com/AltBeacon/spec
 """
 
-from scapy.fields import ByteField, ShortField, SignedByteField, \
-    StrFixedLenField
+from scapy.fields import (
+    ByteField,
+    MayEnd,
+    ShortField,
+    SignedByteField,
+    StrFixedLenField,
+)
 from scapy.layers.bluetooth import EIR_Hdr, EIR_Manufacturer_Specific_Data, \
     UUIDField, LowEnergyBeaconHelper
 from scapy.packet import Packet
@@ -57,7 +59,7 @@ class AltBeacon(Packet, LowEnergyBeaconHelper):
         ShortField("id2", None),
         ShortField("id3", None),
 
-        SignedByteField("tx_power", None),
+        MayEnd(SignedByteField("tx_power", None)),
         ByteField("mfg_reserved", None),
     ]
 

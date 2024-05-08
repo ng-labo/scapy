@@ -1,14 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
 
 """
 Routing and handling of network interfaces.
 """
 
-
-from __future__ import absolute_import
 
 from scapy.compat import plain_str
 from scapy.config import conf
@@ -16,7 +14,7 @@ from scapy.error import Scapy_Exception, warning
 from scapy.interfaces import resolve_iface
 from scapy.utils import atol, ltoa, itom, pretty_list
 
-from scapy.compat import (
+from typing import (
     Any,
     Dict,
     List,
@@ -34,7 +32,9 @@ class Route:
     def __init__(self):
         # type: () -> None
         self.routes = []  # type: List[Tuple[int, int, str, str, str, int]]
-        self.resync()
+        self.invalidate_cache()
+        if conf.route_autoload:
+            self.resync()
 
     def invalidate_cache(self):
         # type: () -> None
@@ -104,7 +104,7 @@ class Route:
         route = self.make_route(*args, **kargs)
         try:
             i = self.routes.index(route)
-            del(self.routes[i])
+            del self.routes[i]
         except ValueError:
             raise ValueError("No matching route found!")
 
@@ -145,8 +145,8 @@ class Route:
         the_net = the_rawaddr & the_msk
         self.routes.append((the_net, the_msk, '0.0.0.0', iff, the_addr, 1))
 
-    def route(self, dst=None, verbose=conf.verb):
-        # type: (Optional[str], int) -> Tuple[str, str, str]
+    def route(self, dst=None, verbose=conf.verb, _internal=False):
+        # type: (Optional[str], int, bool) -> Tuple[str, str, str]
         """Returns the IPv4 routes to a host.
         parameters:
          - dst: the IPv4 of the destination host
@@ -195,6 +195,10 @@ class Route:
         paths.sort(key=lambda x: (-x[0], x[1]))
         # Return interface
         ret = paths[0][2]
+        # Check if source is 0.0.0.0. This is a 'via' route with no src.
+        if ret[1] == "0.0.0.0" and not _internal:
+            # Then get the source from route(gw)
+            ret = (ret[0], self.route(ret[2], _internal=True)[1], ret[2])
         self.cache[dst] = ret
         return ret
 
@@ -217,5 +221,5 @@ class Route:
 
 conf.route = Route()
 
-# Load everything, update conf.iface
-conf.ifaces.reload()
+# Update conf.iface
+conf.ifaces.load_confiface()

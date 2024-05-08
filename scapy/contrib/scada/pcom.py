@@ -1,28 +1,19 @@
-# coding: utf8
-
+# SPDX-License-Identifier: GPL-2.0-or-later
 # This file is part of Scapy
-# Scapy is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 2 of the License, or
-# any later version.
-#
-# Scapy is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Scapy. If not, see <http://www.gnu.org/licenses/>.
+# See https://scapy.net/ for more information
+# Copyright (C) 2019 Luis Rosa <lmrosa@dei.uc.pt>
 
 # scapy.contrib.description = PCOM Protocol
 # scapy.contrib.status = loads
 
-# Copyright (C) 2019 Luis Rosa <lmrosa@dei.uc.pt>
-#
-# PCOM is a protocol to communicate with Unitronics PLCs either by serial
-# or TCP. Two modes are available, ASCII and Binary.
-#
-# See https://unitronicsplc.com/Download/SoftwareUtilities/Unitronics%20PCOM%20Protocol.pdf # noqa
+"""
+PCOM
+
+PCOM is a protocol to communicate with Unitronics PLCs either by serial
+or TCP. Two modes are available, ASCII and Binary.
+
+https://unitronicsplc.com/Download/SoftwareUtilities/Unitronics%20PCOM%20Protocol.pdf
+"""
 
 import struct
 
@@ -30,7 +21,7 @@ from scapy.packet import Packet, bind_layers
 from scapy.layers.inet import TCP
 from scapy.fields import XShortField, ByteEnumField, XByteField, \
     StrFixedLenField, StrLenField, LEShortField, \
-    LEFieldLenField, LEX3BytesField, XLEShortField
+    LEFieldLenField, XLE3BytesField, XLEShortField
 from scapy.volatile import RandShort
 from scapy.compat import bytes_encode, orb
 
@@ -92,7 +83,7 @@ class PCOM(Packet):
 
     def post_build(self, pkt, pay):
         if self.len is None and pay:
-            pkt = pkt[:4] + struct.pack("H", len(pay))
+            pkt = pkt[:4] + struct.pack("<H", len(pay))
         return pkt + pay
 
 
@@ -202,7 +193,7 @@ class PCOMBinaryRequest(PCOMBinary):
         XByteField("id", 0x0),
         XByteField("reserved1", 0xfe),
         XByteField("reserved2", 0x1),
-        LEX3BytesField("reserved3", 0x0),
+        XLE3BytesField("reserved3", 0x0),
         PCOMBinaryCommandField("command", None),
         XByteField("reserved4", 0x0),
         StrFixedLenField("commandSpecific", '', 6),
@@ -221,7 +212,7 @@ class PCOMBinaryResponse(PCOMBinary):
         XByteField("reserved1", 0xfe),
         XByteField("id", 0x0),
         XByteField("reserved2", 0x1),
-        LEX3BytesField("reserved3", 0x0),
+        XLE3BytesField("reserved3", 0x0),
         PCOMBinaryCommandField("command", None),
         XByteField("reserved4", 0x0),
         StrFixedLenField("commandSpecific", '', 6),

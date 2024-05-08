@@ -1,26 +1,29 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
-# Copyright (C) Philippe Biondi <phil@secdev.org>
-# Copyright (C) Gabriel Potter <gabriel@potter.fr>
-# This program is published under a GPLv2 license
+# See https://scapy.net/ for more information
+# Copyright (C) Gabriel Potter <gabriel[]potter[]fr>
 
 """
 Customizations needed to support Microsoft Windows.
 """
 
-from __future__ import absolute_import
-from __future__ import print_function
+from glob import glob
 import os
 import platform as platform_lib
 import socket
-import subprocess as sp
-from glob import glob
 import struct
+import subprocess as sp
 import warnings
 
-from scapy.arch.windows.structures import _windows_title, \
-    GetAdaptersAddresses, GetIpForwardTable, GetIpForwardTable2, \
-    get_service_status
+import winreg
+
+from scapy.arch.windows.structures import (
+    _windows_title,
+    GetAdaptersAddresses,
+    GetIpForwardTable,
+    GetIpForwardTable2,
+    get_service_status,
+)
 from scapy.consts import WINDOWS, WINDOWS_XP
 from scapy.config import conf, ProgPath
 from scapy.error import (
@@ -32,14 +35,30 @@ from scapy.error import (
 )
 from scapy.interfaces import NetworkInterface, InterfaceProvider, \
     dev_from_index, resolve_iface, network_name
-from scapy.pton_ntop import inet_ntop, inet_pton
+from scapy.pton_ntop import inet_ntop
 from scapy.utils import atol, itom, mac2str, str2mac
 from scapy.utils6 import construct_source_candidate_set, in6_getscope
-from scapy.data import ARPHDR_ETHER, load_manuf
-import scapy.modules.six as six
-from scapy.modules.six.moves import input, winreg
+from scapy.data import ARPHDR_ETHER
 from scapy.compat import plain_str
 from scapy.supersocket import SuperSocket
+
+# re-export
+from scapy.arch.common import get_if_raw_addr  # noqa: F401
+
+# Typing imports
+from typing import (
+    Any,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+    cast,
+    overload,
+)
+from scapy.compat import Literal
 
 conf.use_pcap = True
 
@@ -65,18 +84,18 @@ else:
 
 # hot-patching socket for missing variables on Windows
 if not hasattr(socket, 'IPPROTO_IPIP'):
-    socket.IPPROTO_IPIP = 4
+    socket.IPPROTO_IPIP = 4  # type: ignore
 if not hasattr(socket, 'IP_RECVTTL'):
-    socket.IP_RECVTTL = 12
+    socket.IP_RECVTTL = 12  # type: ignore
 if not hasattr(socket, 'IPV6_HDRINCL'):
-    socket.IPV6_HDRINCL = 36
-# https://bugs.python.org/issue29515
+    socket.IPV6_HDRINCL = 36  # type: ignore
+# https://github.com/python/cpython/issues/73701
 if not hasattr(socket, 'IPPROTO_IPV6'):
-    socket.SOL_IPV6 = 41
+    socket.IPPROTO_IPV6 = 41
 if not hasattr(socket, 'SOL_IPV6'):
-    socket.SOL_IPV6 = socket.IPPROTO_IPV6
+    socket.SOL_IPV6 = socket.IPPROTO_IPV6  # type: ignore
 if not hasattr(socket, 'IPPROTO_GRE'):
-    socket.IPPROTO_GRE = 47
+    socket.IPPROTO_GRE = 47  # type: ignore
 if not hasattr(socket, 'IPPROTO_AH'):
     socket.IPPROTO_AH = 51
 if not hasattr(socket, 'IPPROTO_ESP'):
@@ -86,6 +105,7 @@ _WlanHelper = NPCAP_PATH + "\\WlanHelper.exe"
 
 
 def _encapsulate_admin(cmd):
+    # type: (str) -> str
     """Encapsulate a command with an Administrator flag"""
     # To get admin access, we start a new powershell instance with admin
     # rights, which will execute the command. This needs to be done from a
@@ -97,6 +117,7 @@ def _encapsulate_admin(cmd):
 
 
 def _get_npcap_config(param_key):
+    # type: (str) -> Optional[str]
     """
     Get a Npcap parameter matching key in the registry.
 
@@ -113,10 +134,11 @@ def _get_npcap_config(param_key):
         winreg.CloseKey(key)
     except WindowsError:
         return None
-    return dot11_adapters
+    return cast(str, dot11_adapters)
 
 
 def _where(filename, dirs=None, env="PATH"):
+    # type: (str, Optional[Any], str) -> str
     """Find file in current dir, in deep_lookup cache or in system path"""
     if dirs is None:
         dirs = []
@@ -135,6 +157,7 @@ def _where(filename, dirs=None, env="PATH"):
 
 
 def win_find_exe(filename, installsubdir=None, env="ProgramFiles"):
+    # type: (str, Optional[Any], str) -> str
     """Find executable in current dir, system path or in the
     given ProgramFiles subdir, and retuen its absolute path.
     """
@@ -149,17 +172,19 @@ def win_find_exe(filename, installsubdir=None, env="ProgramFiles"):
             path = None
         else:
             break
-    return path
+    return path or ""
 
 
 class WinProgPath(ProgPath):
     def __init__(self):
+        # type: () -> None
         self._reload()
 
     def _reload(self):
-        self.pdfreader = None
-        self.psreader = None
-        self.svgreader = None
+        # type: () -> None
+        self.pdfreader = ""
+        self.psreader = ""
+        self.svgreader = ""
         # We try some magic to find the appropriate executables
         self.dot = win_find_exe("dot")
         self.tcpdump = win_find_exe("windump")
@@ -169,37 +194,21 @@ class WinProgPath(ProgPath):
         self.hexedit = win_find_exe("hexer")
         self.sox = win_find_exe("sox")
         self.wireshark = win_find_exe("wireshark", "wireshark")
-        self.usbpcapcmd = win_find_exe(
-            "USBPcapCMD",
-            installsubdir="USBPcap",
-            env="programfiles"
-        )
+        self.extcap_folders = [
+            os.path.join(os.environ.get("appdata", ""), "Wireshark", "extcap"),
+            os.path.join(os.environ.get("programfiles", ""), "Wireshark", "extcap"),
+        ]
         self.powershell = win_find_exe(
             "powershell",
             installsubdir="System32\\WindowsPowerShell\\v1.0",
             env="SystemRoot"
         )
-        self.cscript = win_find_exe("cscript", installsubdir="System32",
-                                    env="SystemRoot")
         self.cmd = win_find_exe("cmd", installsubdir="System32",
                                 env="SystemRoot")
-        if self.wireshark:
-            try:
-                new_manuf = load_manuf(
-                    os.path.sep.join(
-                        self.wireshark.split(os.path.sep)[:-1]
-                    ) + os.path.sep + "manuf"
-                )
-            except (IOError, OSError):  # FileNotFoundError not available on Py2 - using OSError  # noqa: E501
-                log_loading.warning("Wireshark is installed, but cannot read manuf !")  # noqa: E501
-                new_manuf = None
-            if new_manuf:
-                # Inject new ManufDB
-                conf.manufdb.__dict__.clear()
-                conf.manufdb.__dict__.update(new_manuf.__dict__)
 
 
 def _exec_cmd(command):
+    # type: (str) -> Tuple[bytes, int]
     """Call a CMD command and return the output and returncode"""
     proc = sp.Popen(command,
                     stdout=sp.PIPE,
@@ -212,6 +221,7 @@ conf.prog = WinProgPath()
 
 if conf.prog.tcpdump and conf.use_npcap:
     def test_windump_npcap():
+        # type: () -> bool
         """Return whether windump version is correct or not"""
         try:
             p_test_windump = sp.Popen([conf.prog.tcpdump, "-help"], stdout=sp.PIPE, stderr=sp.STDOUT)  # noqa: E501
@@ -231,42 +241,46 @@ if conf.prog.tcpdump and conf.use_npcap:
 
 
 def get_windows_if_list(extended=False):
+    # type: (bool) -> List[Dict[str, Any]]
     """Returns windows interfaces through GetAdaptersAddresses.
 
     params:
      - extended: include anycast and multicast IPv6 (default False)"""
     # Should work on Windows XP+
     def _get_mac(x):
+        # type: (Dict[str, Any]) -> str
         size = x["physical_address_length"]
         if size != 6:
             return ""
         data = bytearray(x["physical_address"])
         return str2mac(bytes(data)[:size])
 
+    def _resolve_ips(y):
+        # type: (List[Dict[str, Any]]) -> List[str]
+        if not isinstance(y, list):
+            return []
+        ips = []
+        for ip in y:
+            addr = ip['address']['address'].contents
+            if addr.si_family == socket.AF_INET6:
+                ip_key = "Ipv6"
+                si_key = "sin6_addr"
+            else:
+                ip_key = "Ipv4"
+                si_key = "sin_addr"
+            data = getattr(addr, ip_key)
+            data = getattr(data, si_key)
+            data = bytes(bytearray(data.byte))
+            # Build IP
+            if data:
+                ips.append(inet_ntop(addr.si_family, data))
+        return ips
+
     def _get_ips(x):
+        # type: (Dict[str, Any]) -> List[str]
         unicast = x['first_unicast_address']
         anycast = x['first_anycast_address']
         multicast = x['first_multicast_address']
-
-        def _resolve_ips(y):
-            if not isinstance(y, list):
-                return []
-            ips = []
-            for ip in y:
-                addr = ip['address']['address'].contents
-                if addr.si_family == socket.AF_INET6:
-                    ip_key = "Ipv6"
-                    si_key = "sin6_addr"
-                else:
-                    ip_key = "Ipv4"
-                    si_key = "sin_addr"
-                data = getattr(addr, ip_key)
-                data = getattr(data, si_key)
-                data = bytes(bytearray(data.byte))
-                # Build IP
-                if data:
-                    ips.append(inet_ntop(addr.si_family, data))
-            return ips
 
         ips = []
         ips.extend(_resolve_ips(unicast))
@@ -275,25 +289,23 @@ def get_windows_if_list(extended=False):
             ips.extend(_resolve_ips(multicast))
         return ips
 
-    if six.PY2:
-        _str_decode = lambda x: x.encode('utf8', errors='ignore')
-    else:
-        _str_decode = plain_str
     return [
         {
-            "name": _str_decode(x["friendly_name"]),
+            "name": plain_str(x["friendly_name"]),
             "index": x["interface_index"],
-            "description": _str_decode(x["description"]),
-            "guid": _str_decode(x["adapter_name"]),
+            "description": plain_str(x["description"]),
+            "guid": plain_str(x["adapter_name"]),
             "mac": _get_mac(x),
             "ipv4_metric": 0 if WINDOWS_XP else x["ipv4_metric"],
             "ipv6_metric": 0 if WINDOWS_XP else x["ipv6_metric"],
-            "ips": _get_ips(x)
+            "ips": _get_ips(x),
+            "nameservers": _resolve_ips(x["first_dns_server_address"])
         } for x in GetAdaptersAddresses()
     ]
 
 
 def _pcapname_to_guid(pcap_name):
+    # type: (str) -> str
     """Converts a Winpcap/Npcap pcpaname to its guid counterpart.
     e.g. \\DEVICE\\NPF_{...} => {...}
     """
@@ -306,14 +318,17 @@ class NetworkInterface_Win(NetworkInterface):
     """A network interface of your local host"""
 
     def __init__(self, provider, data=None):
-        self.cache_mode = None
-        self.ipv4_metric = None
-        self.ipv6_metric = None
-        self.guid = None
-        self.raw80211 = None
+        # type: (WindowsInterfacesProvider, Optional[Dict[str, Any]]) -> None
+        self.cache_mode = None  # type: Optional[bool]
+        self.ipv4_metric = None  # type: Optional[int]
+        self.ipv6_metric = None  # type: Optional[int]
+        self.nameservers = []  # type: List[str]
+        self.guid = None  # type: Optional[str]
+        self.raw80211 = None  # type: Optional[bool]
         super(NetworkInterface_Win, self).__init__(provider, data)
 
     def update(self, data):
+        # type: (Dict[str, Any]) -> None
         """Update info about a network interface according
         to a given dictionary. Such data is provided by get_windows_if_list
         """
@@ -323,6 +338,7 @@ class NetworkInterface_Win(NetworkInterface):
         self.guid = data['guid']
         self.ipv4_metric = data['ipv4_metric']
         self.ipv6_metric = data['ipv6_metric']
+        self.nameservers = data['nameservers']
 
         try:
             # Npcap loopback interface
@@ -337,6 +353,7 @@ class NetworkInterface_Win(NetworkInterface):
         super(NetworkInterface_Win, self).update(data)
 
     def _check_npcap_requirement(self):
+        # type: () -> None
         if not conf.use_npcap:
             raise OSError("This operation requires Npcap.")
         if self.raw80211 is None:
@@ -346,7 +363,10 @@ class NetworkInterface_Win(NetworkInterface):
             raise Scapy_Exception("Npcap 802.11 support is NOT enabled !")
 
     def _npcap_set(self, key, val):
+        # type: (str, str) -> bool
         """Internal function. Set a [key] parameter to [value]"""
+        if self.guid is None:
+            raise OSError("Interface not setup")
         res, code = _exec_cmd(_encapsulate_admin(
             " ".join([_WlanHelper, self.guid[1:-1], key, val])
         ))
@@ -356,6 +376,9 @@ class NetworkInterface_Win(NetworkInterface):
         return True
 
     def _npcap_get(self, key):
+        # type: (str) -> str
+        if self.guid is None:
+            raise OSError("Interface not setup")
         res, code = _exec_cmd(" ".join([_WlanHelper, self.guid[1:-1], key]))
         _windows_title()  # Reset title of the window
         if code != 0:
@@ -363,12 +386,14 @@ class NetworkInterface_Win(NetworkInterface):
         return plain_str(res.strip())
 
     def mode(self):
+        # type: () -> str
         """Get the interface operation mode.
         Only available with Npcap."""
         self._check_npcap_requirement()
         return self._npcap_get("mode")
 
     def ismonitor(self):
+        # type: () -> bool
         """Returns True if the interface is in monitor mode.
         Only available with Npcap."""
         if self.cache_mode is not None:
@@ -381,6 +406,7 @@ class NetworkInterface_Win(NetworkInterface):
             return False
 
     def setmonitor(self, enable=True):
+        # type: (bool) -> bool
         """Alias for setmode('monitor') or setmode('managed')
         Only available with Npcap"""
         # We must reset the monitor cache
@@ -395,6 +421,7 @@ class NetworkInterface_Win(NetworkInterface):
         return tmp if enable else (not tmp)
 
     def availablemodes(self):
+        # type: () -> List[str]
         """Get all available interface modes.
         Only available with Npcap."""
         # According to https://nmap.org/npcap/guide/npcap-devguide.html#npcap-feature-dot11  # noqa: E501
@@ -402,6 +429,7 @@ class NetworkInterface_Win(NetworkInterface):
         return self._npcap_get("modes").split(",")
 
     def setmode(self, mode):
+        # type: (Union[str, int]) -> bool
         """Set the interface mode. It can be:
         - 0 or managed: Managed Mode (aka "Extensible Station Mode")
         - 1 or monitor: Monitor Mode (aka "Network Monitor Mode")
@@ -428,6 +456,7 @@ class NetworkInterface_Win(NetworkInterface):
         return self._npcap_set("mode", m)
 
     def channel(self):
+        # type: () -> int
         """Get the channel of the interface.
         Only available with Npcap."""
         # According to https://nmap.org/npcap/guide/npcap-devguide.html#npcap-feature-dot11  # noqa: E501
@@ -435,20 +464,23 @@ class NetworkInterface_Win(NetworkInterface):
         return int(self._npcap_get("channel"))
 
     def setchannel(self, channel):
+        # type: (int) -> bool
         """Set the channel of the interface (1-14):
         Only available with Npcap."""
         # According to https://nmap.org/npcap/guide/npcap-devguide.html#npcap-feature-dot11  # noqa: E501
         self._check_npcap_requirement()
         return self._npcap_set("channel", str(channel))
 
-    def frequence(self):
-        """Get the frequence of the interface.
+    def frequency(self):
+        # type: () -> int
+        """Get the frequency of the interface.
         Only available with Npcap."""
         # According to https://nmap.org/npcap/guide/npcap-devguide.html#npcap-feature-dot11  # noqa: E501
         self._check_npcap_requirement()
         return int(self._npcap_get("freq"))
 
-    def setfrequence(self, freq):
+    def setfrequency(self, freq):
+        # type: (int) -> bool
         """Set the channel of the interface (1-14):
         Only available with Npcap."""
         # According to https://nmap.org/npcap/guide/npcap-devguide.html#npcap-feature-dot11  # noqa: E501
@@ -456,6 +488,7 @@ class NetworkInterface_Win(NetworkInterface):
         return self._npcap_set("freq", str(freq))
 
     def availablemodulations(self):
+        # type: () -> List[str]
         """Get all available 802.11 interface modulations.
         Only available with Npcap."""
         # According to https://nmap.org/npcap/guide/npcap-devguide.html#npcap-feature-dot11  # noqa: E501
@@ -463,6 +496,7 @@ class NetworkInterface_Win(NetworkInterface):
         return self._npcap_get("modus").split(",")
 
     def modulation(self):
+        # type: () -> str
         """Get the 802.11 modulation of the interface.
         Only available with Npcap."""
         # According to https://nmap.org/npcap/guide/npcap-devguide.html#npcap-feature-dot11  # noqa: E501
@@ -470,6 +504,7 @@ class NetworkInterface_Win(NetworkInterface):
         return self._npcap_get("modu")
 
     def setmodulation(self, modu):
+        # type: (int) -> bool
         """Set the interface modulation. It can be:
            - 0: dsss
            - 1: fhss
@@ -508,13 +543,15 @@ class WindowsInterfacesProvider(InterfaceProvider):
     libpcap = True
 
     def _is_valid(self, dev):
+        # type: (NetworkInterface) -> bool
         # Winpcap (and old Npcap) have no support for PCAP_IF_UP :(
         if dev.flags == 0:
             return True
-        return dev.flags & PCAP_IF_UP
+        return bool(dev.flags & PCAP_IF_UP)
 
     @classmethod
     def _pcap_check(cls):
+        # type: () -> None
         """Performs checks/restart pcap adapter"""
         if not conf.use_pcap:
             # Winpcap/Npcap isn't installed
@@ -523,13 +560,14 @@ class WindowsInterfacesProvider(InterfaceProvider):
         _detect = pcap_service_status()
 
         def _ask_user():
+            # type: () -> bool
             if not conf.interactive:
                 return False
             msg = "Do you want to start it ? (yes/no) [y]: "
             try:
                 # Better IPython compatibility
                 import IPython
-                return IPython.utils.io.ask_yes_no(msg, default='y')
+                return cast(bool, IPython.utils.io.ask_yes_no(msg, default='y'))
             except (NameError, ImportError):
                 while True:
                     _confir = input(msg)
@@ -558,6 +596,7 @@ class WindowsInterfacesProvider(InterfaceProvider):
         )
 
     def load(self, NetworkInterface_Win=NetworkInterface_Win):
+        # type: (type) -> Dict[str, NetworkInterface]
         results = {}
         if not conf.cache_pcapiflist:
             # Try a restart
@@ -573,11 +612,24 @@ class WindowsInterfacesProvider(InterfaceProvider):
                     i['guid'] = NPCAP_LOOPBACK_NAME
                 windows_interfaces[i['guid']] = i
 
+        def iterinterfaces() -> Iterator[
+            Tuple[str, Optional[str], List[str], int, str, Optional[Dict[str, Any]]]
+        ]:
+            if conf.use_pcap:
+                # We have a libpcap provider: enrich pcap interfaces with
+                # Windows data
+                for netw, if_data in conf.cache_pcapiflist.items():
+                    name, ips, flags, _ = if_data
+                    guid = _pcapname_to_guid(netw)
+                    data = windows_interfaces.get(guid, None)
+                    yield netw, name, ips, flags, guid, data
+            else:
+                # We don't have a libpcap provider: only use Windows data
+                for guid, data in windows_interfaces.items():
+                    yield guid, None, [], 0, guid, data
+
         index = 0
-        for netw, if_data in six.iteritems(conf.cache_pcapiflist):
-            name, ips, flags, _ = if_data
-            guid = _pcapname_to_guid(netw)
-            data = windows_interfaces.get(guid, None)
+        for netw, name, ips, flags, guid, data in iterinterfaces():
             if data:
                 # Exists in Windows registry
                 data['network_name'] = netw
@@ -596,13 +648,15 @@ class WindowsInterfacesProvider(InterfaceProvider):
                     'ipv4_metric': 0,
                     'ipv6_metric': 0,
                     'ips': ips,
-                    'flags': flags
+                    'flags': flags,
+                    'nameservers': [],
                 }
             # No KeyError will happen here, as we get it from cache
-            results[guid] = NetworkInterface_Win(self, data)
+            results[netw] = NetworkInterface_Win(self, data)
         return results
 
     def reload(self):
+        # type: () -> Dict[str, NetworkInterface]
         """Reload interface list"""
         self.restarted_adapter = False
         if conf.use_pcap:
@@ -611,16 +665,28 @@ class WindowsInterfacesProvider(InterfaceProvider):
             load_winpcapy()
         return self.load()
 
+    def _l3socket(self, dev, ipv6):
+        # type: (NetworkInterface, bool) -> Type[SuperSocket]
+        """Return L3 socket used by interfaces of this provider"""
+        if ipv6:
+            return conf.L3socket6
+        else:
+            return conf.L3socket
+
 
 # Register provider
 conf.ifaces.register_provider(WindowsInterfacesProvider)
 
 
 def get_ips(v6=False):
+    # type: (bool) -> Dict[NetworkInterface, List[str]]
     """Returns all available IPs matching to interfaces, using the windows system.
-    Should only be used as a WinPcapy fallback."""
+    Should only be used as a WinPcapy fallback.
+
+    :param v6: IPv6 addresses
+    """
     res = {}
-    for iface in six.itervalues(conf.ifaces):
+    for iface in conf.ifaces.values():
         if v6:
             res[iface] = iface.ips[6]
         else:
@@ -628,17 +694,11 @@ def get_ips(v6=False):
     return res
 
 
-def get_if_raw_addr(iff):
-    """Return the raw IPv4 address of interface"""
-    iff = resolve_iface(iff)
-    if not iff.ip:
-        return None
-    return inet_pton(socket.AF_INET, iff.ip)
-
-
 def get_ip_from_name(ifname, v6=False):
+    # type: (str, bool) -> str
     """Backward compatibility: indirectly calls get_ips
-    Deprecated."""
+    Deprecated.
+    """
     warnings.warn(
         "get_ip_from_name is deprecated. Use the `ip` attribute of the iface "
         "or use get_ips() to get all ips per interface.",
@@ -649,17 +709,20 @@ def get_ip_from_name(ifname, v6=False):
 
 
 def pcap_service_name():
+    # type: () -> str
     """Return the pcap adapter service's name"""
     return "npcap" if conf.use_npcap else "npf"
 
 
 def pcap_service_status():
+    # type: () -> bool
     """Returns whether the windows pcap adapter is running or not"""
     status = get_service_status(pcap_service_name())
     return status["dwCurrentState"] == 4
 
 
 def _pcap_service_control(action, askadmin=True):
+    # type: (str, bool) -> bool
     """Internal util to run pcap control command"""
     command = action + ' ' + pcap_service_name()
     res, code = _exec_cmd(_encapsulate_admin(command) if askadmin else command)
@@ -669,11 +732,13 @@ def _pcap_service_control(action, askadmin=True):
 
 
 def pcap_service_start(askadmin=True):
+    # type: (bool) -> bool
     """Starts the pcap adapter. Will ask for admin. Returns True if success"""
     return _pcap_service_control('sc start', askadmin=askadmin)
 
 
 def pcap_service_stop(askadmin=True):
+    # type: (bool) -> bool
     """Stops the pcap adapter. Will ask for admin. Returns True if success"""
     return _pcap_service_control('sc stop', askadmin=askadmin)
 
@@ -681,11 +746,15 @@ def pcap_service_stop(askadmin=True):
 if conf.use_pcap:
     _orig_open_pcap = libpcap.open_pcap
 
-    def open_pcap(iface, *args, **kargs):
+    def open_pcap(iface,  # type: Union[str, NetworkInterface]
+                  *args,  # type: Any
+                  **kargs  # type: Any
+                  ):
+        # type: (...) -> libpcap._PcapWrapper_libpcap
         """open_pcap: Windows routine for creating a pcap from an interface.
         This function is also responsible for detecting monitor mode.
         """
-        iface = resolve_iface(iface)
+        iface = cast(NetworkInterface_Win, resolve_iface(iface))
         iface_network_name = iface.network_name
         if not iface:
             raise Scapy_Exception(
@@ -702,22 +771,26 @@ if conf.use_pcap:
                 # interface state
                 iface.setmonitor(kw_monitor)
         return _orig_open_pcap(iface_network_name, *args, **kargs)
-    libpcap.open_pcap = open_pcap
+    libpcap.open_pcap = open_pcap  # type: ignore
 
 
 def get_if_raw_hwaddr(iface):
-    iface = resolve_iface(iface)
-    return ARPHDR_ETHER, mac2str(iface.mac)
+    # type: (Union[NetworkInterface, str]) -> Tuple[int, bytes]
+    _iface = resolve_iface(iface)
+    return ARPHDR_ETHER, _iface.mac and mac2str(_iface.mac) or b"\x00" * 6
 
 
 def _read_routes_c_v1():
+    # type: () -> List[Tuple[int, int, str, str, str, int]]
     """Retrieve Windows routes through a GetIpForwardTable call.
 
     This is compatible with XP but won't get IPv6 routes."""
     def _extract_ip(obj):
+        # type: (int) -> str
         return inet_ntop(socket.AF_INET, struct.pack("<I", obj))
 
     def _proc(ip):
+        # type: (int) -> int
         if WINDOWS_XP:
             return struct.unpack("<I", struct.pack(">I", ip))[0]
         return ip
@@ -730,7 +803,7 @@ def _read_routes_c_v1():
         metric = route['ForwardMetric1']
         # Build route
         try:
-            iface = dev_from_index(ifIndex)
+            iface = cast(NetworkInterface_Win, dev_from_index(ifIndex))
             if not iface.ip or iface.ip == "0.0.0.0":
                 continue
         except ValueError:
@@ -743,7 +816,20 @@ def _read_routes_c_v1():
     return routes
 
 
-def _read_routes_c(ipv6=False):
+@overload
+def _read_routes_c(ipv6):  # noqa: F811
+    # type: (Literal[True]) -> List[Tuple[str, int, str, str, List[str], int]]
+    pass
+
+
+@overload
+def _read_routes_c(ipv6=False):  # noqa: F811
+    # type: (Literal[False]) -> List[Tuple[int, int, str, str, str, int]]
+    pass
+
+
+def _read_routes_c(ipv6=False):  # noqa: F811
+    # type: (bool) -> Union[List[Tuple[int, int, str, str, str, int]], List[Tuple[str, int, str, str, List[str], int]]]  # noqa: E501
     """Retrieve Windows routes through a GetIpForwardTable2 call.
 
     This is not available on Windows XP !"""
@@ -753,14 +839,14 @@ def _read_routes_c(ipv6=False):
     metric_name = 'ipv6_metric' if ipv6 else 'ipv4_metric'
     if ipv6:
         lifaddr = in6_getifaddr()
-    routes = []
+    routes = []  # type: List[Any]
 
     def _extract_ip(obj):
+        # type: (Dict[str, Any]) -> str
         ip = obj[sock_addr_name][sin_addr_name]
         ip = bytes(bytearray(ip['byte']))
         # Build IP
-        ip = inet_ntop(af, ip)
-        return ip
+        return inet_ntop(af, ip)
 
     for route in GetIpForwardTable2(af):
         # Extract data
@@ -790,6 +876,7 @@ def _read_routes_c(ipv6=False):
 
 
 def read_routes():
+    # type: () -> List[Tuple[int, int, str, str, str, int]]
     routes = []
     try:
         if WINDOWS_XP:
@@ -807,23 +894,31 @@ def read_routes():
 
 
 def in6_getifaddr():
+    # type: () -> List[Tuple[str, int, str]]
     """
     Returns all IPv6 addresses found on the computer
     """
-    ifaddrs = []
+    ifaddrs = []  # type: List[Tuple[str, int, str]]
     ip6s = get_ips(v6=True)
-    for iface in ip6s:
-        ips = ip6s[iface]
+    for iface, ips in ip6s.items():
         for ip in ips:
             scope = in6_getscope(ip)
-            ifaddrs.append((ip, scope, iface))
+            ifaddrs.append((ip, scope, iface.network_name))
     # Appends Npcap loopback if available
     if conf.use_npcap and conf.loopback_name:
         ifaddrs.append(("::1", 0, conf.loopback_name))
     return ifaddrs
 
 
-def _append_route6(routes, dpref, dp, nh, iface, lifaddr, metric):
+def _append_route6(routes,  # type: List[Tuple[str, int, str, str, List[str], int]]
+                   dpref,  # type: str
+                   dp,  # type: int
+                   nh,  # type: str
+                   iface,  # type: str
+                   lifaddr,  # type: List[Tuple[str, int, str]]
+                   metric,  # type: int
+                   ):
+    # type: (...) -> None
     cset = []  # candidate set (possible source addresses)
     if iface == conf.loopback_name:
         if dpref == '::':
@@ -834,11 +929,12 @@ def _append_route6(routes, dpref, dp, nh, iface, lifaddr, metric):
         cset = construct_source_candidate_set(dpref, dp, devaddrs)
     if not cset:
         return
-    # APPEND (DESTINATION, NETMASK, NEXT HOP, IFACE, CANDIDATS, METRIC)
+    # APPEND (DESTINATION, NETMASK, NEXT HOP, IFACE, CANDIDATES, METRIC)
     routes.append((dpref, dp, nh, iface, cset, metric))
 
 
 def read_routes6():
+    # type: () -> List[Tuple[str, int, str, str, List[str], int]]
     routes6 = []
     if WINDOWS_XP:
         return routes6
@@ -849,7 +945,11 @@ def read_routes6():
     return routes6
 
 
-def _route_add_loopback(routes=None, ipv6=False, iflist=None):
+def _route_add_loopback(routes=None,  # type: Optional[List[Any]]
+                        ipv6=False,  # type: bool
+                        iflist=None,  # type: Optional[List[str]]
+                        ):
+    # type: (...) -> None
     """Add a route to 127.0.0.1 and ::1 to simplify unit tests on Windows"""
     if not WINDOWS:
         warning("Calling _route_add_loopback is only valid on Windows")
@@ -873,24 +973,31 @@ def _route_add_loopback(routes=None, ipv6=False, iflist=None):
         if iface == conf.loopback_name:
             conf.route.routes.remove(route)
     # Remove conf.loopback_name interface
-    for devname, iface in list(conf.ifaces.items()):
-        if iface == conf.loopback_name:
+    for devname, ifname in list(conf.ifaces.items()):
+        if ifname == conf.loopback_name:
             conf.ifaces.pop(devname)
     # Inject interface
-    conf.ifaces["{0XX00000-X000-0X0X-X00X-00XXXX000XXX}"] = adapter
+    conf.ifaces[r"\Device\NPF_{0XX00000-X000-0X0X-X00X-00XXXX000XXX}"] = adapter
     conf.loopback_name = adapter.network_name
     if isinstance(conf.iface, NetworkInterface):
         if conf.iface.network_name == conf.loopback_name:
             conf.iface = adapter
-    conf.netcache.arp_cache["127.0.0.1"] = "ff:ff:ff:ff:ff:ff"
-    conf.netcache.in6_neighbor["::1"] = "ff:ff:ff:ff:ff:ff"
+    conf.netcache.arp_cache["127.0.0.1"] = "ff:ff:ff:ff:ff:ff"  # type: ignore
+    conf.netcache.in6_neighbor["::1"] = "ff:ff:ff:ff:ff:ff"  # type: ignore
     # Build the packed network addresses
     loop_net = struct.unpack("!I", socket.inet_aton("127.0.0.0"))[0]
     loop_mask = struct.unpack("!I", socket.inet_aton("255.0.0.0"))[0]
     # Build the fake routes
-    loopback_route = (loop_net, loop_mask, "0.0.0.0", adapter, "127.0.0.1", 1)
-    loopback_route6 = ('::1', 128, '::', adapter, ["::1"], 1)
-    loopback_route6_custom = ("fe80::", 128, "::", adapter, ["::1"], 1)
+    loopback_route = (
+        loop_net,
+        loop_mask,
+        "0.0.0.0",
+        adapter.network_name,
+        "127.0.0.1",
+        1
+    )
+    loopback_route6 = ('::1', 128, '::', adapter.network_name, ["::1"], 1)
+    loopback_route6_custom = ("fe80::", 128, "::", adapter.network_name, ["::1"], 1)
     if routes is None:
         # Injection
         conf.route6.routes.append(loopback_route6)
@@ -911,8 +1018,24 @@ class _NotAvailableSocket(SuperSocket):
     desc = "wpcap.dll missing"
 
     def __init__(self, *args, **kargs):
+        # type: (*Any, **Any) -> None
         raise RuntimeError(
             "Sniffing and sending packets is not available at layer 2: "
             "winpcap is not installed. You may use conf.L3socket or"
             "conf.L3socket6 to access layer 3"
         )
+
+
+#######
+# DNS #
+#######
+
+def read_nameservers() -> List[str]:
+    """Return the nameservers configured by the OS (on the default interface)
+    """
+    # Windows has support for different DNS servers on each network interface,
+    # but to be cross-platform we only return the servers for the default one.
+    if isinstance(conf.iface, NetworkInterface_Win):
+        return conf.iface.nameservers
+    else:
+        return []

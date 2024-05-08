@@ -1,32 +1,49 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
 
 """
 NTP (Network Time Protocol).
 References : RFC 5905, RC 1305, ntpd source code
 """
 
-from __future__ import absolute_import
 import struct
 import time
 import datetime
 
 from scapy.packet import Packet, bind_layers
-from scapy.fields import BitField, BitEnumField, ByteField, ByteEnumField, \
-    XByteField, SignedByteField, FlagsField, ShortField, LEShortField, \
-    IntField, LEIntField, FixedPointField, IPField, StrField, \
-    StrFixedLenField, StrFixedLenEnumField, XStrFixedLenField, PacketField, \
-    PacketLenField, PacketListField, FieldListField, ConditionalField, \
-    PadField
-from scapy.layers.inet6 import IP6Field
+from scapy.fields import (
+    BitEnumField,
+    BitField,
+    ByteEnumField,
+    ByteField,
+    ConditionalField,
+    FieldListField,
+    FixedPointField,
+    FlagsField,
+    IP6Field,
+    IPField,
+    IntField,
+    LEIntField,
+    LEShortField,
+    MayEnd,
+    PacketField,
+    PacketLenField,
+    PacketListField,
+    PadField,
+    ShortField,
+    SignedByteField,
+    StrField,
+    StrFixedLenEnumField,
+    StrFixedLenField,
+    XByteField,
+    XStrFixedLenField,
+)
 from scapy.layers.inet import UDP
 from scapy.utils import lhex
 from scapy.compat import orb
 from scapy.config import conf
-import scapy.modules.six as six
-from scapy.modules.six.moves import range
 
 
 #############################################################################
@@ -79,14 +96,14 @@ class TimeStampField(FixedPointField):
             return "--"
         val = self.i2h(pkt, val)
         if val < _NTP_BASETIME:
-            return val
+            return str(val)
         return time.strftime(
             "%a, %d %b %Y %H:%M:%S +0000",
             time.gmtime(int(val - _NTP_BASETIME))
         )
 
     def any2i(self, pkt, val):
-        if isinstance(val, six.string_types):
+        if isinstance(val, str):
             val = int(time.mktime(time.strptime(val))) + _NTP_BASETIME
         elif isinstance(val, datetime.datetime):
             val = int(val.strftime("%s")) + _NTP_BASETIME
@@ -211,7 +228,9 @@ class NTP(Packet):
         return s
 
     def mysummary(self):
-        return self.sprintf("NTP v%ir,NTP.version%, %NTP.mode%")
+        return self.sprintf(
+            "NTP v%ir,{0}.version%, %{0}.mode%".format(self.__class__.__name__)
+        )
 
 
 class _NTPAuthenticatorPaddingField(StrField):
@@ -429,8 +448,8 @@ class NTPHeader(NTP):
         BitField("version", 4, 3),
         BitEnumField("mode", 3, 3, _ntp_modes),
         BitField("stratum", 2, 8),
-        BitField("poll", 0xa, 8),
-        BitField("precision", 0, 8),
+        SignedByteField("poll", 0xa),
+        SignedByteField("precision", 0),
         FixedPointField("delay", 0, size=32, frac_bits=16),
         FixedPointField("dispersion", 0, size=32, frac_bits=16),
         ConditionalField(IPField("id", "127.0.0.1"), lambda p: p.stratum > 1),
@@ -742,6 +761,8 @@ class NTPControlDataPacketLenField(PacketLenField):
 
     def m2i(self, pkt, m):
         ret = None
+        if not m:
+            return ret
 
         # op_code == CTL_OP_READSTAT
         if pkt.op_code == 1:
@@ -797,7 +818,7 @@ class NTPControl(NTP):
     fields_desc = [
         BitField("zeros", 0, 2),
         BitField("version", 2, 3),
-        BitField("mode", 6, 3),
+        BitEnumField("mode", 6, 3, _ntp_modes),
         BitField("response", 0, 1),
         BitField("err", 0, 1),
         BitField("more", 0, 1),
@@ -809,8 +830,8 @@ class NTPControl(NTP):
         ShortField("association_id", 0),
         ShortField("offset", 0),
         ShortField("count", None),
-        NTPControlDataPacketLenField(
-            "data", "", Packet, length_from=lambda p: p.count),
+        MayEnd(NTPControlDataPacketLenField(
+               "data", "", Packet, length_from=lambda p: p.count)),
         PacketField("authenticator", "", NTPAuthenticator),
     ]
 
@@ -1099,7 +1120,7 @@ class NTPInfoSys(Packet):
         ByteField("peer_mode", 0),
         ByteField("leap", 0),
         ByteField("stratum", 0),
-        ByteField("precision", 0),
+        SignedByteField("precision", 0),
         FixedPointField("rootdelay", 0, size=32, frac_bits=16),
         FixedPointField("rootdispersion", 0, size=32, frac_bits=16),
         IPField("refid", 0),
@@ -1157,7 +1178,8 @@ class NTPInfoMemStats(Packet):
             "hashcount",
             [0.0 for i in range(0, _NTP_HASH_SIZE)],
             ByteField("", 0),
-            count_from=lambda p: _NTP_HASH_SIZE
+            count_from=lambda p: _NTP_HASH_SIZE,
+            max_count=_NTP_HASH_SIZE
         )
     ]
 
@@ -1779,7 +1801,7 @@ class NTPPrivate(NTP):
         BitField("response", 0, 1),
         BitField("more", 0, 1),
         BitField("version", 2, 3),
-        BitField("mode", 0, 3),
+        BitEnumField("mode", 7, 3, _ntp_modes),
         BitField("auth", 0, 1),
         BitField("seq", 0, 7),
         ByteEnumField("implementation", 0, _implementations),

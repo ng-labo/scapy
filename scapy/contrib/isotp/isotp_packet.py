@@ -1,22 +1,35 @@
-
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Nils Weiss <nils@we155.de>
-# This program is published under a GPLv2 license
 
 # scapy.contrib.description = ISO-TP (ISO 15765-2) Packet Definitions
 # scapy.contrib.status = library
 
 import struct
+import logging
 
-from scapy.compat import Optional, List, Tuple, Any, Type
+from scapy.config import conf
 from scapy.packet import Packet
 from scapy.fields import BitField, FlagsField, StrLenField, \
     ThreeBytesField, XBitField, ConditionalField, \
-    BitEnumField, ByteField, XByteField, BitFieldLenField, StrField
+    BitEnumField, ByteField, XByteField, BitFieldLenField, StrField, \
+    FieldLenField, IntField, ShortField
 from scapy.compat import chb, orb
-from scapy.layers.can import CAN
-from scapy.error import Scapy_Exception, warning
+from scapy.layers.can import CAN, CAN_FD_MAX_DLEN as CAN_FD_MAX_DLEN
+from scapy.error import Scapy_Exception
+
+# Typing imports
+from typing import (
+    Optional,
+    List,
+    Tuple,
+    Any,
+    Type,
+    cast,
+)
+
+log_isotp = logging.getLogger("scapy.contrib.isotp")
 
 CAN_MAX_IDENTIFIER = (1 << 29) - 1  # Maximum 29-bit identifier
 CAN_MTU = 16
@@ -28,7 +41,6 @@ ISOTP_TYPES = {0: 'single',
                2: 'consecutive',
                3: 'flow_control'}
 
-
 N_PCI_SF = 0x00  # /* single frame */
 N_PCI_FF = 0x10  # /* first frame */
 N_PCI_CF = 0x20  # /* consecutive frame */
@@ -37,9 +49,9 @@ N_PCI_FC = 0x30  # /* flow control */
 
 class ISOTP(Packet):
     """Packet class for ISOTP messages. This class contains additional
-    slots for source address (src), destination address (dst),
-    extended source address (exsrc) and
-    extended destination address (exdst) information. This information
+    slots for source address (tx_id), destination address (rx_id),
+    extended source address (ext_address) and
+    extended destination address (rx_ext_address) information. This information
     gets filled from ISOTPSockets or the ISOTPMessageBuilder, if it
     is available. Address information is not used for Packet comparison.
 
@@ -50,45 +62,55 @@ class ISOTP(Packet):
     fields_desc = [
         StrField('data', b"")
     ]
-    __slots__ = Packet.__slots__ + ["src", "dst", "exsrc", "exdst"]
+    __slots__ = Packet.__slots__ + ["tx_id", "rx_id", "ext_address", "rx_ext_address"]  # noqa: E501
 
     def __init__(self, *args, **kwargs):
         # type: (Any, Any) -> None
-        self.src = kwargs.pop("src", None)  # type: Optional[int]
-        self.dst = kwargs.pop("dst", None)  # type: Optional[int]
-        self.exsrc = kwargs.pop("exsrc", None)  # type: Optional[int]
-        self.exdst = kwargs.pop("exdst", None)  # type: Optional[int]
+        self.tx_id = kwargs.pop("tx_id", None)  # type: Optional[int]
+        self.rx_id = kwargs.pop("rx_id", None)  # type: Optional[int]
+        self.ext_address = kwargs.pop("ext_address", None)  # type: Optional[int]  # noqa: E501
+        self.rx_ext_address = kwargs.pop("rx_ext_address", None)  # type: Optional[int]  # noqa: E501
         Packet.__init__(self, *args, **kwargs)
         self.validate_fields()
 
     def validate_fields(self):
         # type: () -> None
-        """Helper function to validate information in src, dst, exsrc and exdst
-        slots
+        """Helper function to validate information in tx_id, rx_id,
+        ext_address and rx_ext_address slots
         """
-        if self.src is not None:
-            if not 0 <= self.src <= CAN_MAX_IDENTIFIER:
-                raise Scapy_Exception("src is not a valid CAN identifier")
-        if self.dst is not None:
-            if not 0 <= self.dst <= CAN_MAX_IDENTIFIER:
-                raise Scapy_Exception("dst is not a valid CAN identifier")
-        if self.exsrc is not None:
-            if not 0 <= self.exsrc <= 0xff:
-                raise Scapy_Exception("exsrc is not a byte")
-        if self.exdst is not None:
-            if not 0 <= self.exdst <= 0xff:
-                raise Scapy_Exception("exdst is not a byte")
+        if self.tx_id is not None:
+            if not 0 <= self.tx_id <= CAN_MAX_IDENTIFIER:
+                raise Scapy_Exception("tx_id is not a valid CAN identifier")
+        if self.rx_id is not None:
+            if not 0 <= self.rx_id <= CAN_MAX_IDENTIFIER:
+                raise Scapy_Exception("rx_id is not a valid CAN identifier")
+        if self.ext_address is not None:
+            if not 0 <= self.ext_address <= 0xff:
+                raise Scapy_Exception("ext_address is not a byte")
+        if self.rx_ext_address is not None:
+            if not 0 <= self.rx_ext_address <= 0xff:
+                raise Scapy_Exception("rx_ext_address is not a byte")
 
     def fragment(self, *args, **kargs):
         # type: (*Any, **Any) -> List[Packet]
         """Helper function to fragment an ISOTP message into multiple
         CAN frames.
 
+        :param fd: type: Optional[bool]: will fragment the can frames
+            with size CAN_FD_MAX_DLEN
+
         :return: A list of CAN frames
         """
-        data_bytes_in_frame = 7
-        if self.exdst is not None:
-            data_bytes_in_frame = 6
+
+        fd = kargs.pop("fd", False)
+
+        def _get_data_len():
+            # type: () -> int
+            return CAN_MAX_DLEN if not fd else CAN_FD_MAX_DLEN
+
+        data_bytes_in_frame = _get_data_len() - 1
+        if self.rx_ext_address is not None:
+            data_bytes_in_frame = data_bytes_in_frame - 1
 
         if len(self.data) > ISOTP_MAX_DLEN_2015:
             raise Scapy_Exception("Too much data in ISOTP message")
@@ -96,13 +118,13 @@ class ISOTP(Packet):
         if len(self.data) <= data_bytes_in_frame:
             # We can do this in a single frame
             frame_data = struct.pack('B', len(self.data)) + self.data
-            if self.exdst:
-                frame_data = struct.pack('B', self.exdst) + frame_data
+            if self.rx_ext_address:
+                frame_data = struct.pack('B', self.rx_ext_address) + frame_data
 
-            if self.dst is None or self.dst <= 0x7ff:
-                pkt = CAN(identifier=self.dst, data=frame_data)
+            if self.rx_id is None or self.rx_id <= 0x7ff:
+                pkt = CAN(identifier=self.rx_id, data=frame_data)
             else:
-                pkt = CAN(identifier=self.dst, flags="extended",
+                pkt = CAN(identifier=self.rx_id, flags="extended",
                           data=frame_data)
             return [pkt]
 
@@ -111,14 +133,14 @@ class ISOTP(Packet):
             frame_header = struct.pack(">H", len(self.data) + 0x1000)
         else:
             frame_header = struct.pack(">HI", 0x1000, len(self.data))
-        if self.exdst:
-            frame_header = struct.pack('B', self.exdst) + frame_header
-        idx = 8 - len(frame_header)
+        if self.rx_ext_address:
+            frame_header = struct.pack('B', self.rx_ext_address) + frame_header
+        idx = _get_data_len() - len(frame_header)
         frame_data = self.data[0:idx]
-        if self.dst is None or self.dst <= 0x7ff:
-            frame = CAN(identifier=self.dst, data=frame_header + frame_data)
+        if self.rx_id is None or self.rx_id <= 0x7ff:
+            frame = CAN(identifier=self.rx_id, data=frame_header + frame_data)
         else:
-            frame = CAN(identifier=self.dst, flags="extended",
+            frame = CAN(identifier=self.rx_id, flags="extended",
                         data=frame_header + frame_data)
 
         # Construct consecutive frames
@@ -131,15 +153,15 @@ class ISOTP(Packet):
             n += 1
             idx += len(frame_data)
 
-            if self.exdst:
-                frame_header = struct.pack('B', self.exdst) + frame_header
-            if self.dst is None or self.dst <= 0x7ff:
-                pkt = CAN(identifier=self.dst, data=frame_header + frame_data)
+            if self.rx_ext_address:
+                frame_header = struct.pack('B', self.rx_ext_address) + frame_header  # noqa: E501
+            if self.rx_id is None or self.rx_id <= 0x7ff:
+                pkt = CAN(identifier=self.rx_id, data=frame_header + frame_data)  # noqa: E501
             else:
-                pkt = CAN(identifier=self.dst, flags="extended",
+                pkt = CAN(identifier=self.rx_id, flags="extended",
                           data=frame_header + frame_data)
             pkts.append(pkt)
-        return pkts
+        return cast(List[Packet], pkts)
 
     @staticmethod
     def defragment(can_frames, use_extended_addressing=None):
@@ -160,15 +182,17 @@ class ISOTP(Packet):
 
         dst = can_frames[0].identifier
         if any(frame.identifier != dst for frame in can_frames):
-            warning("Not all CAN frames have the same identifier")
+            log_isotp.warning("Not all CAN frames have the same identifier")
 
         parser = ISOTPMessageBuilder(use_extended_addressing)
         parser.feed(can_frames)
 
         results = []
         for p in parser:
-            if (use_extended_addressing is True and p.exdst is not None) \
-                    or (use_extended_addressing is False and p.exdst is None) \
+            if (use_extended_addressing is True and
+                p.rx_ext_address is not None) \
+                    or (use_extended_addressing is False and
+                        p.rx_ext_address is None) \
                     or (use_extended_addressing is None):
                 results.append(p)
 
@@ -176,8 +200,9 @@ class ISOTP(Packet):
             return None
 
         if len(results) > 1:
-            warning("More than one ISOTP frame could be defragmented from the "
-                    "provided CAN frames, only returning the first one.")
+            log_isotp.warning(
+                "More than one ISOTP frame could be defragmented from the "
+                "provided CAN frames, only returning the first one.")
 
         return results[0]
 
@@ -204,6 +229,10 @@ class ISOTPHeader(CAN):
         """
         if self.length is None:
             pkt = pkt[:4] + chb(len(pay)) + pkt[5:]
+
+        if conf.contribs['CAN']['swap-bytes']:
+            data = CAN.inv_endianness(pkt)  # type: bytes
+            return data + pay
         return pkt + pay
 
     def guess_payload_class(self, payload):
@@ -214,15 +243,63 @@ class ISOTPHeader(CAN):
         :param payload: payload bytes string
         :return: Type of payload class
         """
+        if len(payload) < 1:
+            return self.default_payload_class(payload)
+
         t = (orb(payload[0]) & 0xf0) >> 4
         if t == 0:
-            return ISOTP_SF
+            length = (orb(payload[0]) & 0x0f)
+            if length == 0:
+                return ISOTP_SF_FD
+            else:
+                return ISOTP_SF
         elif t == 1:
-            return ISOTP_FF
+            if len(payload) < 2:
+                return self.default_payload_class(payload)
+            length = ((orb(payload[0]) & 0x0f) << 12) + orb(payload[1])
+            if length == 0:
+                return ISOTP_FF_FD
+            else:
+                return ISOTP_FF
         elif t == 2:
             return ISOTP_CF
         else:
             return ISOTP_FC
+
+
+class ISOTPHeader_FD(ISOTPHeader):
+    name = 'ISOTPHeaderFD'
+    fields_desc = [
+        FlagsField('flags', 0, 3, ['error',
+                                   'remote_transmission_request',
+                                   'extended']),
+        XBitField('identifier', 0, 29),
+        ByteField('length', None),
+        FlagsField('fd_flags', 4, 8, ['bit_rate_switch',
+                                      'error_state_indicator',
+                                      'fd_frame']),
+        ShortField('reserved', 0),
+    ]
+
+    def post_build(self, pkt, pay):
+        # type: (bytes, bytes) -> bytes
+
+        data = super().post_build(pkt, pay)
+
+        length = data[4]
+
+        if 8 < length <= 24:
+            wire_length = length + (-length) % 4
+        elif 24 < length <= 64:
+            wire_length = length + (-length) % 8
+        elif length > 64:
+            raise NotImplementedError
+        else:
+            wire_length = length
+
+        pad = b"\x00" * (wire_length - length)
+
+        return data[0:4] + chb(wire_length) + data[5:] + pad
 
 
 class ISOTPHeaderEA(ISOTPHeader):
@@ -237,7 +314,7 @@ class ISOTPHeaderEA(ISOTPHeader):
         XByteField('extended_address', 0)
     ]
 
-    def post_build(self, p, pay):
+    def post_build(self, pkt, pay):
         # type: (bytes, bytes) -> bytes
         """
         This will set the ByteField 'length' to the correct value.
@@ -245,8 +322,48 @@ class ISOTPHeaderEA(ISOTPHeader):
         is counted as payload on the CAN layer
         """
         if self.length is None:
-            p = p[:4] + chb(len(pay) + 1) + p[5:]
-        return p + pay
+            pkt = pkt[:4] + chb(len(pay) + 1) + pkt[5:]
+
+        if conf.contribs['CAN']['swap-bytes']:
+            data = CAN.inv_endianness(pkt)  # type: bytes
+            return data + pay
+        return pkt + pay
+
+
+class ISOTPHeaderEA_FD(ISOTPHeaderEA):
+    name = 'ISOTPHeaderExtendedAddressFD'
+    fields_desc = [
+        FlagsField('flags', 0, 3, ['error',
+                                   'remote_transmission_request',
+                                   'extended']),
+        XBitField('identifier', 0, 29),
+        ByteField('length', None),
+        FlagsField('fd_flags', 4, 8, ['bit_rate_switch',
+                                      'error_state_indicator',
+                                      'fd_frame']),
+        ShortField('reserved', 0),
+        XByteField('extended_address', 0)
+    ]
+
+    def post_build(self, pkt, pay):
+        # type: (bytes, bytes) -> bytes
+
+        data = super().post_build(pkt, pay)
+
+        length = data[4]
+
+        if 8 < length <= 24:
+            wire_length = length + (-length) % 4
+        elif 24 < length <= 64:
+            wire_length = length + (-length) % 8
+        elif length > 64:
+            raise NotImplementedError
+        else:
+            wire_length = length
+
+        pad = b"\x00" * (wire_length - length)
+
+        return data[0:4] + chb(wire_length) + data[5:] + pad
 
 
 ISOTP_TYPE = {0: 'single',
@@ -264,13 +381,33 @@ class ISOTP_SF(Packet):
     ]
 
 
+class ISOTP_SF_FD(Packet):
+    name = 'ISOTPSingleFrameFD'
+    fields_desc = [
+        BitEnumField('type', 0, 4, ISOTP_TYPE),
+        BitField('zero_field', 0, 4),
+        FieldLenField('message_size', None, length_of='data', fmt="B"),
+        StrLenField('data', b'', length_from=lambda pkt: pkt.message_size)
+    ]
+
+
 class ISOTP_FF(Packet):
     name = 'ISOTPFirstFrame'
     fields_desc = [
         BitEnumField('type', 1, 4, ISOTP_TYPE),
         BitField('message_size', 0, 12),
-        ConditionalField(BitField('extended_message_size', 0, 32),
+        ConditionalField(IntField('extended_message_size', 0),
                          lambda pkt: pkt.message_size == 0),
+        StrField('data', b'', fmt="B")
+    ]
+
+
+class ISOTP_FF_FD(Packet):
+    name = 'ISOTPFirstFrame'
+    fields_desc = [
+        BitEnumField('type', 1, 4, ISOTP_TYPE),
+        BitField('zero_field', 0, 12),
+        IntField('message_size', 0),
         StrField('data', b'', fmt="B")
     ]
 

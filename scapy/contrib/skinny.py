@@ -1,27 +1,16 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# This file is part of Scapy
+# See https://scapy.net/ for more information
+#  Copyright (C) 2006 Nicolas Bareil <nicolas.bareil <at> eads.net>
+#                     EADS/CRC security team
+
 # scapy.contrib.description = Skinny Call Control Protocol (SCCP)
 # scapy.contrib.status = loads
 
+"""
+Skinny Call Control Protocol (SCCP) extension
+"""
 
-#############################################################################
-#                                                                           #
-#  scapy-skinny.py --- Skinny Call Control Protocol (SCCP) extension        #
-#                                                                           #
-#  Copyright (C) 2006    Nicolas Bareil      <nicolas.bareil@ eads.net>     #
-#                        EADS/CRC security team                             #
-#                                                                           #
-#  This file is part of Scapy                                               #
-#  Scapy is free software: you can redistribute it and/or modify            #
-#  under the terms of the GNU General Public License version 2 as           #
-#  published by the Free Software Foundation; version 2.                    #
-#                                                                           #
-#  This program is distributed in the hope that it will be useful, but      #
-#  WITHOUT ANY WARRANTY; without even the implied warranty of               #
-#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU        #
-#  General Public License for more details.                                 #
-#                                                                           #
-#############################################################################
-
-from __future__ import absolute_import
 import time
 import struct
 
@@ -29,7 +18,6 @@ from scapy.packet import Packet, bind_layers
 from scapy.fields import FlagsField, IPField, LEIntEnumField, LEIntField, \
     StrFixedLenField
 from scapy.layers.inet import TCP
-from scapy.modules.six.moves import range
 from scapy.volatile import RandShort
 from scapy.config import conf
 

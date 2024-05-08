@@ -1,9 +1,8 @@
-# -*- mode: python3; indent-tabs-mode: nil; tab-width: 4 -*-
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
 # Copyright (C) Michael Farrell <micolous+git@gmail.com>
-# This program is published under a GPLv2 license
 
 """
 Implementation of TUN/TAP interfaces.
@@ -11,9 +10,7 @@ Implementation of TUN/TAP interfaces.
 These allow Scapy to act as the remote side of a virtual network interface.
 """
 
-from __future__ import absolute_import
 
-import os
 import socket
 import time
 from fcntl import ioctl
@@ -31,7 +28,6 @@ from scapy.layers.l2 import Ether
 from scapy.packet import Packet
 from scapy.supersocket import SimpleSocket
 
-import scapy.modules.six as six
 
 # Linux-specific defines (/usr/include/linux/if_tun.h)
 LINUX_TUNSETIFF = 0x400454ca
@@ -211,12 +207,7 @@ class TunTapInterface(SimpleSocket):
 
         x += self.mtu_overhead
 
-        if six.PY2:
-            # For some mystical reason, using self.ins.read ignores
-            # buffering=0 on python 2.7 and blocks ?!
-            dat = os.read(self.ins.fileno(), x)
-        else:
-            dat = self.ins.read(x)
+        dat = self.ins.read(x)
         r = self.kernel_packet_class, dat, time.time()
         if self.mtu_overhead > 0 and self.strip_packet_info:
             # Get the packed class of the payload, without triggering a full

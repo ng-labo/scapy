@@ -1,26 +1,33 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Nils Weiss <nils@we155.de>
-# This program is published under a GPLv2 license
 
 # scapy.contrib.description = Staged AutomotiveTestCase base classes
 # scapy.contrib.status = library
 
 
-from scapy.compat import Any, List, Optional, Dict, Callable, cast, \
-    TYPE_CHECKING
+from scapy.contrib.automotive import log_automotive
 from scapy.contrib.automotive.scanner.graph import _Edge
-from scapy.error import log_interactive
 from scapy.contrib.automotive.ecu import EcuState, EcuResponse, Ecu
 from scapy.contrib.automotive.scanner.test_case import AutomotiveTestCaseABC, \
     TestCaseGenerator, StateGenerator, _SocketUnion
 
-
+# Typing imports
+from typing import (
+    Any,
+    List,
+    Optional,
+    Dict,
+    Callable,
+    cast,
+    Tuple,
+    TYPE_CHECKING,
+)
 if TYPE_CHECKING:
     from scapy.contrib.automotive.scanner.test_case import _TransitionTuple
     from scapy.contrib.automotive.scanner.configuration import \
         AutomotiveTestCaseExecutorConfiguration
-
 
 # type definitions
 _TestCaseConnectorCallable = \
@@ -166,8 +173,8 @@ class StagedAutomotiveTestCase(AutomotiveTestCaseABC, TestCaseGenerator, StateGe
         else:
             # We waited more iterations and no new state appeared,
             # let's enter the next stage
-            log_interactive.info(
-                "[+] Staged AutomotiveTestCase %s completed",
+            log_automotive.info(
+                "Staged AutomotiveTestCase %s completed",
                 self.current_test_case.__class__.__name__)
             self.__stage_index += 1
             self.__completion_delay = 0
@@ -195,15 +202,15 @@ class StagedAutomotiveTestCase(AutomotiveTestCaseABC, TestCaseGenerator, StateGe
                 if self.__current_kwargs is not None and con_kwargs is not None:  # noqa: E501
                     self.__current_kwargs.update(con_kwargs)
 
-        log_interactive.debug("[i] Stage AutomotiveTestCase %s kwargs: %s",
-                              self.current_test_case.__class__.__name__,
-                              self.__current_kwargs)
+        log_automotive.debug("Stage AutomotiveTestCase %s kwargs: %s",
+                             self.current_test_case.__class__.__name__,
+                             self.__current_kwargs)
 
         self.current_test_case.pre_execute(socket, state, global_configuration)
 
     def execute(self, socket, state, **kwargs):
         # type: (_SocketUnion, EcuState, Any) -> None
-        kwargs = self.__current_kwargs or dict()
+        kwargs.update(self.__current_kwargs or dict())
         self.current_test_case.execute(socket, state, **kwargs)
 
     def post_execute(self,
@@ -215,25 +222,20 @@ class StagedAutomotiveTestCase(AutomotiveTestCaseABC, TestCaseGenerator, StateGe
             socket, state, global_configuration)
 
     @staticmethod
-    def _show_headline(headline, sep="=", dump=False):
-        # type: (str, str, bool) -> Optional[str]
+    def _show_headline(headline, sep="="):
+        # type: (str, str) -> str
         s = "\n\n" + sep * (len(headline) + 10) + "\n"
         s += " " * 5 + headline + "\n"
         s += sep * (len(headline) + 10) + "\n"
-
-        if dump:
-            return s + "\n"
-        else:
-            print(s)
-            return None
+        return s + "\n"
 
     def show(self, dump=False, filtered=True, verbose=False):
         # type: (bool, bool, bool) -> Optional[str]
-        s = self._show_headline("AutomotiveTestCase Pipeline", "=", dump) or ""
+        s = self._show_headline("AutomotiveTestCase Pipeline", "=")
         for idx, t in enumerate(self.__test_cases):
             s += self._show_headline(
-                "AutomotiveTestCase Stage %d" % idx, "-", dump) or ""
-            s += t.show(dump, filtered, verbose) or ""
+                "AutomotiveTestCase Stage %d" % idx, "-")
+            s += t.show(True, filtered, verbose) or ""
 
         if dump:
             return s + "\n"
@@ -256,3 +258,18 @@ class StagedAutomotiveTestCase(AutomotiveTestCaseABC, TestCaseGenerator, StateGe
 
         supported_responses.sort(key=Ecu.sort_key_func)
         return supported_responses
+
+    def runtime_estimation(self):
+        # type: () -> Optional[Tuple[int, int, float]]
+
+        if hasattr(self.current_test_case, "runtime_estimation"):
+            cur_est = self.current_test_case.runtime_estimation()
+            if cur_est:
+                return len(self.test_cases), \
+                    self.__stage_index, \
+                    float(self.__stage_index) / len(self.test_cases) + \
+                    cur_est[2] / len(self.test_cases)
+
+        return len(self.test_cases), \
+            self.__stage_index, \
+            float(self.__stage_index) / len(self.test_cases)

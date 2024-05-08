@@ -26,7 +26,9 @@ a.nh == 6 and a.plen == 20 and isinstance(a.payload, TCP) and a.payload.chksum =
 raw(IPv6()/TCP()/Raw(load="somedata")) == b'`\x00\x00\x00\x00\x1c\x06@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x14\x00P\x00\x00\x00\x00\x00\x00\x00\x00P\x02 \x00\xd5\xdd\x00\x00somedata'
 
 = IPv6 Class with TCP and TCP data - dissection
-a=IPv6(raw(IPv6()/TCP(dport=1234, sport=1234)/Raw(load="somedata")))
+with no_debug_dissector():
+    a=IPv6(raw(IPv6()/TCP(dport=1234, sport=1234)/Raw(load="somedata")))
+
 a.nh == 6 and a.plen == 28 and isinstance(a.payload, TCP) and a.payload.chksum == 0xcc9d and isinstance(a.payload.payload, Raw) and a[Raw].load == b"somedata"
 
 = IPv6 Class binding with Ethernet - build
@@ -51,6 +53,15 @@ GRE in p and p[GRE:1].proto == 0x6558 and p[GRE:2].proto == 0x86DD and IPv6 in p
 = IPv6 ma_addr coverage on hashret
 IPv6(dst="ff00::1:ff28:9c5a", src="::").hashret() == b';'
 
+= PseudoIPv6
+p = PseudoIPv6(src="fd00::abcd", dst="fd00::1234", uplen=64, nh=socket.IPPROTO_UDP)
+raw(p) == b"\xfd\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xab\xcd\xfd\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x12\x34\x00\x00\x00\x40\x00\x00\x00\x11"
+
+= in6_chksum is computed on UDP or TCP build
+with no_debug_dissector():
+    p = IPv6(raw(IPv6()/UDP()/Raw(load="somedata")))
+    assert p.chksum == 0x45cb
+
 ########### IPv6ExtHdrRouting Class ###########################
 
 = IPv6ExtHdrRouting Class - No address - build
@@ -72,20 +83,20 @@ raw(IPv6(src="2048::deca", dst="2047::cafe")/IPv6ExtHdrRouting(addresses=["2001:
 
 = IPv6ExtHdrSegmentRouting Class - default - build & dissect
 s = raw(IPv6()/IPv6ExtHdrSegmentRouting()/UDP())
-assert(s == b'`\x00\x00\x00\x00 +@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x11\x02\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x005\x005\x00\x08\xffr')
+assert s == b'`\x00\x00\x00\x00 +@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x11\x02\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x005\x005\x00\x08\xffr'
 
 p = IPv6(s)
-assert(UDP in p and IPv6ExtHdrSegmentRouting in p)
-assert(p[IPv6ExtHdrSegmentRouting].lastentry == 0 and len(p[IPv6ExtHdrSegmentRouting].addresses) == 1 and len(p[IPv6ExtHdrSegmentRouting].tlv_objects) == 0)
+assert UDP in p and IPv6ExtHdrSegmentRouting in p
+assert p[IPv6ExtHdrSegmentRouting].lastentry == 0 and len(p[IPv6ExtHdrSegmentRouting].addresses) == 1 and len(p[IPv6ExtHdrSegmentRouting].tlv_objects) == 0
 
 = IPv6ExtHdrSegmentRouting Class - addresses list - build & dissect
 
 s = raw(IPv6()/IPv6ExtHdrSegmentRouting(addresses=["::1", "::2", "::3"])/UDP())
-assert(s == b'`\x00\x00\x00\x00@+@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x11\x06\x04\x02\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x005\x005\x00\x08\xffr')
+assert s == b'`\x00\x00\x00\x00@+@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x11\x06\x04\x02\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x005\x005\x00\x08\xffr'
 
 p = IPv6(s)
-assert(UDP in p and IPv6ExtHdrSegmentRouting in p)
-assert(p[IPv6ExtHdrSegmentRouting].lastentry == 2 and len(p[IPv6ExtHdrSegmentRouting].addresses) == 3 and len(p[IPv6ExtHdrSegmentRouting].tlv_objects) == 0)
+assert UDP in p and IPv6ExtHdrSegmentRouting in p
+assert p[IPv6ExtHdrSegmentRouting].lastentry == 2 and len(p[IPv6ExtHdrSegmentRouting].addresses) == 3 and len(p[IPv6ExtHdrSegmentRouting].tlv_objects) == 0
 
 = IPv6ExtHdrSegmentRouting Class - TLVs list - build & dissect
 
@@ -93,25 +104,25 @@ s = raw(IPv6()/IPv6ExtHdrSegmentRouting(tlv_objects=[IPv6ExtHdrSegmentRoutingTLV
 assert s == b'`\x00\x00\x00\x00<+@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x06\x04\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x05\x000\x00\x00\x00\x00\x00\x00\x04\x05\x00\x00\x00\x00\x00\x00\x14\x00P\x00\x00\x00\x00\x00\x00\x00\x00P\x02 \x00\x8f}\x00\x00'
 
 p = IPv6(s)
-assert(TCP in p and IPv6ExtHdrSegmentRouting in p)
-assert(p[IPv6ExtHdrSegmentRouting].lastentry == 0)
-assert(len(p[IPv6ExtHdrSegmentRouting].addresses) == 1 and len(p[IPv6ExtHdrSegmentRouting].tlv_objects) == 2)
-assert(isinstance(p[IPv6ExtHdrSegmentRouting].tlv_objects[1], IPv6ExtHdrSegmentRoutingTLVPadN))
+assert TCP in p and IPv6ExtHdrSegmentRouting in p
+assert p[IPv6ExtHdrSegmentRouting].lastentry == 0
+assert len(p[IPv6ExtHdrSegmentRouting].addresses) == 1 and len(p[IPv6ExtHdrSegmentRouting].tlv_objects) == 2
+assert isinstance(p[IPv6ExtHdrSegmentRouting].tlv_objects[1], IPv6ExtHdrSegmentRoutingTLVPadN)
 
 = IPv6ExtHdrSegmentRouting Class - both lists - build & dissect
 
 s = raw(IPv6()/IPv6ExtHdrSegmentRouting(addresses=["::1", "::2", "::3"], tlv_objects=[IPv6ExtHdrSegmentRoutingTLVIngressNode(),IPv6ExtHdrSegmentRoutingTLVEgressNode()])/ICMPv6EchoRequest())
-assert(s == b'`\x00\x00\x00\x00h+@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01:\x0b\x04\x02\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x01\x12\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x12\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x80\x00\x7f\xbb\x00\x00\x00\x00')
+assert s == b'`\x00\x00\x00\x00h+@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01:\x0b\x04\x02\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x01\x12\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x02\x12\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x80\x00\x7f\xbb\x00\x00\x00\x00'
 
 p = IPv6(s)
-assert(p[IPv6ExtHdrSegmentRouting].lastentry == 2)
-assert(ICMPv6EchoRequest in p and IPv6ExtHdrSegmentRouting in p)
-assert(len(p[IPv6ExtHdrSegmentRouting].addresses) == 3 and len(p[IPv6ExtHdrSegmentRouting].tlv_objects) == 2)
+assert p[IPv6ExtHdrSegmentRouting].lastentry == 2
+assert ICMPv6EchoRequest in p and IPv6ExtHdrSegmentRouting in p
+assert len(p[IPv6ExtHdrSegmentRouting].addresses) == 3 and len(p[IPv6ExtHdrSegmentRouting].tlv_objects) == 2
 
 = IPv6ExtHdrSegmentRouting Class - UDP pseudo-header checksum - build & dissect
 
 s= raw(IPv6(src="fc00::1", dst="fd00::42")/IPv6ExtHdrSegmentRouting(addresses=["fd00::42", "fc13::1337"][::-1], segleft=1, lastentry=1) / UDP(sport=11000, dport=4242) / Raw('foobar'))
-assert(s == b'`\x00\x00\x00\x006+@\xfc\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\xfd\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00B\x11\x04\x04\x01\x01\x00\x00\x00\xfc\x13\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x137\xfd\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00B*\xf8\x10\x92\x00\x0e\x81\xb7foobar')
+assert s == b'`\x00\x00\x00\x006+@\xfc\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\xfd\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00B\x11\x04\x04\x01\x01\x00\x00\x00\xfc\x13\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x137\xfd\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00B*\xf8\x10\x92\x00\x0e\x81\xb7foobar'
 
 
 ############
@@ -232,7 +243,7 @@ in6_addrtomac("FE80::" + in6_mactoifaceid("FF:00:00:00:00:00", ulbit=0)) == 'ff:
 
 import socket
 
-for a in six.moves.range(10):
+for a in range(10):
     s1, s2 = in6_getRandomizedIfaceId('20b:93ff:feeb:2d3')
     s1, s2
     tmp = inet_pton(socket.AF_INET6, "::" + s1)[8:]
@@ -444,7 +455,13 @@ b=IPv6(src="2047::deca", dst="2048::cafe")/ICMPv6EchoReply(id=0x6666, seq=0x7777
 a=IPv6(src="2048::cafe", dst="2047::deca")/ICMPv6EchoRequest(id=0x6666, seq=0x7777, data="somedata")
 (a > b) == True
 
-= ICMPv6EchoRequest and ICMPv6EchoReply - live answers() use Net6
+= ICMPv6EchoRequest and ICMPv6EchoReply - answers() test 7 - IPv6ExtHdrDestOpt
+b = IPv6(b'`\x0f\\\xe3\x00\x08:@\xfe\x80\x00\x00\x00\x00\x00\x00\x02PV\xff\xfe\x84\x1c\x14\xfe\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00&\x81\x00\r\xad\x00\x00\x00\x00')
+a = IPv6(b'`\x00\x00\x00\x00\x10<\xff\xfe\x80\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00&\xfe\x80\x00\x00\x00\x00\x00\x00\x02PV\xff\xfe\x84\x1c\x14:\x00\x00\x00\x00\x00\x00\x00\x80\x00\x0e\xad\x00\x00\x00\x00')
+assert a.hashret() == b.hashret()
+assert b.answers(a)
+
+= ICMPv6EchoRequest and ICMPv6EchoReply - answers() test 8 - (live) use Net6
 ~ netaccess ipv6
 
 a = IPv6(dst="www.google.com")/ICMPv6EchoRequest()
@@ -561,6 +578,25 @@ raw(RouterAlert(optlen=3, value=0xffff)) == b'\x05\x03\xff\xff'
 a=RouterAlert(b'\x05\x03\xff\xff')
 a.otype == 0x05 and a.optlen == 3 and a.value == 0xffff
 
+############
+############
++ Test RPL Option (RFC 6553)
+
+= RplOption - Basic Instantiation
+raw(RplOption()) == b'c\x04\x00\x00\x00\x00'
+
+= RplOption - Basic Dissection
+a=RplOption(b'c\x04\x00\x00\x00\x00')
+a.otype == 0x63 and a.optlen == 4 and a.Down == False and a.RankError == 0 and a.ForwardError == 0 and a.RplInstanceId == 0 and a.SenderRank == 0
+
+= RplOption - Instantiation with specific values
+a=RplOption(RplInstanceId=0x1e, SenderRank=0x800)
+a.otype == 0x63 and a.optlen == 4 and a.Down == False and a.RankError == 0 and a.ForwardError == 0 and a.RplInstanceId == 0x1e and a.SenderRank == 0x800
+
+= RplOption - Instantiation with specific values
+a=RplOption(Down=True, RplInstanceId=0x1e, SenderRank=0x800)
+a.otype == 0x63 and a.optlen == 4 and a.Down == True and a.RankError == 0 and a.ForwardError == 0 and a.RplInstanceId == 0x1e and a.SenderRank == 0x800
+raw(a) == b'c\x04\x80\x1e\x08\x00'
 
 ############
 ############
@@ -617,6 +653,9 @@ raw(IPv6ExtHdrHopByHop(options=[HAO()])) == b';\x02\x01\x02\x00\x00\xc9\x10\x00\
 
 = IPv6ExtHdrHopByHop - Instantiation with RouterAlert option
 raw(IPv6ExtHdrHopByHop(options=[RouterAlert()])) == b';\x00\x05\x02\x00\x00\x01\x00'
+
+= IPv6ExtHdrHopByHop - Instantiation with RPL option
+raw(IPv6ExtHdrHopByHop(options=[RplOption()])) == b';\x00c\x04\x00\x00\x00\x00'
  
 = IPv6ExtHdrHopByHop - Instantiation with Jumbo option
 raw(IPv6ExtHdrHopByHop(options=[Jumbo()])) == b';\x00\xc2\x04\x00\x00\x00\x00'
@@ -769,19 +808,43 @@ b.answers(a)
 + ICMPv6NDOptUnknown Class Test
 
 = ICMPv6NDOptUnknown - Basic Instantiation
-raw(ICMPv6NDOptUnknown()) == b'\x00\x02'
+b = b'\x00\x01\x00\x00\x00\x00\x00\x00'
+
+raw(ICMPv6NDOptUnknown()) == b
 
 = ICMPv6NDOptUnknown - Instantiation with specific values
-raw(ICMPv6NDOptUnknown(len=4, data="somestring")) == b'\x00\x04somestring'
+raw(ICMPv6NDOptUnknown(data="somestring")) == b'\x00\x02somestring\x00\x00\x00\x00'
 
 = ICMPv6NDOptUnknown - Basic Dissection
-a=ICMPv6NDOptUnknown(b'\x00\x02')
-a.type == 0 and a.len == 2
+b = b'\x00\x01\x00\x00\x00\x00\x00\x00'
+
+p = ICMPv6NDOptUnknown(b)
+p.type == 0 and p.len == 1 and p.data == b'\x00' * 6
+
+p = ICMPv6NDOptUnknown(b + b'\x00')
+assert Raw in p and raw(p[Raw]) == b'\x00'
+
+p = ICMPv6NDOptUnknown(b + b'\x00\x00')
+assert raw(p[ICMPv6NDOptUnknown:2]) == b'\x00\x00'
 
 = ICMPv6NDOptUnknown - Dissection with specific values 
-a=ICMPv6NDOptUnknown(b'\x00\x04somerawing')
-a.type == 0 and a.len==4 and a.data == b"so" and isinstance(a.payload, Raw) and a.payload.load == b"merawing"
+p = ICMPv6NDOptUnknown(b'\x00\x01string')
+assert p.type == 0 and p.len == 1 and p.data == b'string'
 
+p = ICMPv6NDOptUnknown(b'\x00\x04somestring')
+assert p.type == 0 and p.len == 4 and p.data == b'somestring'
+
+= ICMPv6NDOptUnknown - Instantiation/Dissection with unknown option in the middle
+b = b'\x01\x01\x00\x00\x00\x00\x00\x00\x00\x02somestring\x00\x00\x00\x00%\x01\x00\x00\x00\x00\x00\x00'
+
+p = ICMPv6NDOptSrcLLAddr()/ICMPv6NDOptUnknown(data='somestring')/ICMPv6NDOptCaptivePortal()
+assert raw(p) == b
+
+p = ICMPv6NDOptSrcLLAddr(b)[ICMPv6NDOptUnknown]
+assert p.type == 0 and p.len == 2 and p.data == b'somestring\x00\x00\x00\x00'
+
+= ICMPv6NDOptUnknown - fuzz
+assert isinstance(fuzz(ICMPv6NDOptUnknown()).type, RandByte)
 
 ############
 ############
@@ -859,26 +922,30 @@ raw(ICMPv6NDOptRedirectedHdr(pkt=IPv6())) == b'\x04\x06\x00\x00\x00\x00\x00\x00`
 = ICMPv6NDOptRedirectedHdr - Basic Dissection
 ~ ICMPv6NDOptRedirectedHdr
 a=ICMPv6NDOptRedirectedHdr(b'\x04\x00\x00\x00')
-assert(a.type == 4)
-assert(a.len == 0)
-assert(a.res == b"\x00\x00")
-assert(a.pkt == b"")
+assert a.type == 4
+assert a.len == 0
+assert a.res == b"\x00\x00"
+assert a.pkt == b""
 
 = ICMPv6NDOptRedirectedHdr - Disssection with specific values
 ~ ICMPv6NDOptRedirectedHdr
-a=ICMPv6NDOptRedirectedHdr(b'\x04\xff\x11\x11\x00\x00\x00\x00somerawingthatisnotanipv6pac')
+with no_debug_dissector():
+    a=ICMPv6NDOptRedirectedHdr(b'\x04\xff\x11\x11\x00\x00\x00\x00somerawingthatisnotanipv6pac')
+
 a.type == 4 and a.len == 255 and a.res == b'\x11\x11\x00\x00\x00\x00' and isinstance(a.pkt, Raw) and a.pkt.load == b"somerawingthatisnotanipv6pac"
 
 = ICMPv6NDOptRedirectedHdr - Dissection with cut IPv6 Header
 ~ ICMPv6NDOptRedirectedHdr
-a=ICMPv6NDOptRedirectedHdr(b'\x04\x06\x00\x00\x00\x00\x00\x00`\x00\x00\x00\x00\x00;@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+with no_debug_dissector():
+    a=ICMPv6NDOptRedirectedHdr(b'\x04\x06\x00\x00\x00\x00\x00\x00`\x00\x00\x00\x00\x00;@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+
 a.type == 4 and a.len == 6 and a.res == b"\x00\x00\x00\x00\x00\x00" and isinstance(a.pkt, Raw) and a.pkt.load == b'`\x00\x00\x00\x00\x00;@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
 
 = ICMPv6NDOptRedirectedHdr - Complete dissection
 ~ ICMPv6NDOptRedirectedHdr
 x=ICMPv6NDOptRedirectedHdr(b'\x04\x06\x00\x00\x00\x00\x00\x00`\x00\x00\x00\x00\x00;@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01')
 y=x.copy()
-del(y.len)
+del y.len
 x == ICMPv6NDOptRedirectedHdr(raw(y))
 
 # Add more tests
@@ -985,9 +1052,9 @@ a=ICMPv6NDOptSrcAddrList(b'\t\x05BBBBBB\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\
 a.type == 9 and a.len == 5 and a.res == b'BBBBBB' and len(a.addrlist) == 2 and a.addrlist[0] == "ffff::ffff" and a.addrlist[1] == "1111::1111"
 
 = ICMPv6NDOptSrcAddrList - Dissection with specific values 
-conf.debug_dissector = False
-a=ICMPv6NDOptSrcAddrList(b'\t\x03BBBBBB\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\x11\x11\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x11\x11')
-conf.debug_dissector = True
+with no_debug_dissector():
+    a=ICMPv6NDOptSrcAddrList(b'\t\x03BBBBBB\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\x11\x11\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x11\x11')
+
 a.type == 9 and a.len == 3 and a.res == b'BBBBBB' and len(a.addrlist) == 1 and a.addrlist[0] == "ffff::ffff" and isinstance(a.payload, Raw) and a.payload.load == b'\x11\x11\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x11\x11'
 
 
@@ -1013,9 +1080,9 @@ a=ICMPv6NDOptTgtAddrList(b'\n\x05BBBBBB\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\
 a.type == 10 and a.len == 5 and a.res == b'BBBBBB' and len(a.addrlist) == 2 and a.addrlist[0] == "ffff::ffff" and a.addrlist[1] == "1111::1111"
 
 = ICMPv6NDOptTgtAddrList - Instantiation with specific values 
-conf.debug_dissector = False
-a=ICMPv6NDOptTgtAddrList(b'\n\x03BBBBBB\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\x11\x11\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x11\x11')
-conf.debug_dissector = True
+with no_debug_dissector():
+    a=ICMPv6NDOptTgtAddrList(b'\n\x03BBBBBB\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff\x11\x11\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x11\x11')
+
 a.type == 10 and a.len == 3 and a.res == b'BBBBBB' and len(a.addrlist) == 1 and a.addrlist[0] == "ffff::ffff" and isinstance(a.payload, Raw) and a.payload.load == b'\x11\x11\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x11\x11'
 
 
@@ -1190,7 +1257,39 @@ p = ICMPv6NDOptDNSSL(b'\x1f\x02\x00\x00\x00\x00\x00<\x04home\x00\x00\x00')
 p.type == 31 and p.len == 2 and p.res == 0 and p.lifetime == 60 and p.searchlist == ["home."]
 
 = ICMPv6NDOptDNSSL - Summary Output
-ICMPv6NDOptDNSSL(searchlist=["home.", "office."]).mysummary() == "ICMPv6 Neighbor Discovery Option - DNS Search List Option home., office."
+ICMPv6NDOptDNSSL(searchlist=["home.", "office.", "{"]).mysummary() == "ICMPv6 Neighbor Discovery Option - DNS Search List Option home., office., {"
+
+
+############
+############
++ ICMPv6NDOptCaptivePortal Class Test
+
+= ICMPv6NDOptCaptivePortal - Basic Instantiation
+raw(ICMPv6NDOptCaptivePortal()) == b"\x25\x01\x00\x00\x00\x00\x00\x00"
+
+= ICMPv6NDOptCaptivePortal - Instantiation with captive portal URI
+raw(ICMPv6NDOptCaptivePortal(URI="https://example.com")) == b"\x25\x03https://example.com\x00\x00\x00"
+
+= ICMPv6NDOptCaptivePortal - Instantiation where total length is already a multiple of 8 bytes
+p = ICMPv6NDOptCaptivePortal(URI="abcdef")
+len(p) == 8 and raw(p) == b"\x25\x01abcdef" and ICMPv6NDOptCaptivePortal(raw(p)).URI == b"abcdef"
+
+= ICMPv6NDOptCaptivePortal - Basic Dissection
+p = ICMPv6NDOptCaptivePortal(b"\x25\x01\x00\x00\x00\x00\x00\x00")
+p.type == 37 and p.len == 1 and p.URI == b""
+
+= ICMPv6NDOptCaptivePortal - Basic Dissection with captive portal URI
+p = ICMPv6NDOptCaptivePortal(b"\x25\x03https://example.com\x00\x00\x00")
+p.type == 37 and p.len == 3 and p.URI == b"https://example.com"
+
+= ICMPv6NDOptCaptivePortal - Dissection with zero length
+p = ICMPv6NDOptCaptivePortal(b"\x25\x00abcdef\x00\x01")
+p.type == 37 and p.len == 0 and p.URI == b"abcdef"
+pay = p.payload
+assert pay.type == 0 and pay.len == 1 and pay.data == b""
+
+= ICMPv6NDOptCaptivePortal - Summary Output
+ICMPv6NDOptCaptivePortal(URI="https://example.com").mysummary() == "ICMPv6 Neighbor Discovery Option - Captive-Portal Option b'https://example.com'"
 
 
 ############
@@ -1203,6 +1302,32 @@ raw(ICMPv6NDOptEFA()) == b'\x1a\x01\x00\x00\x00\x00\x00\x00'
 = ICMPv6NDOptEFA - Basic Dissection
 a=ICMPv6NDOptEFA(b'\x1a\x01\x00\x00\x00\x00\x00\x00')
 a.type==26 and a.len==1 and a.res == 0
+
+
+############
+############
++ ICMPv6NDOptPREF64 Class Test
+
+= ICMPv6NDOptPREF64 - Basic Instantiation
+raw(ICMPv6NDOptPREF64()) == b'\x26\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+
+= ICMPv6NDOptPREF64 - Basic Dissection
+p = ICMPv6NDOptPREF64(b'\x26\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
+assert p.type == 38 and p.len == 2 and p.scaledlifetime == 0 and p.plc == 0 and p.prefix == '::'
+
+= ICMPv6NDOptPREF64 - Instantiation/Dissection with specific values
+p = ICMPv6NDOptPREF64(scaledlifetime=225, plc='/64', prefix='2003:da8:1::')
+assert raw(p) == b'\x26\x02\x07\x09\x20\x03\x0d\xa8\x00\x01\x00\x00\x00\x00\x00\x00'
+
+p = ICMPv6NDOptPREF64(raw(p))
+assert p.type == 38 and p.len == 2 and p.scaledlifetime == 225 and p.plc == 1 and p.prefix == '2003:da8:1::'
+
+p = ICMPv6NDOptPREF64(raw(p) + b'\x00\x00\x00\x00')
+assert ICMPv6NDOptUnknown in p and len(p[ICMPv6NDOptUnknown]) == 4
+
+= ICMPv6NDOptPREF64 - Summary Output
+ICMPv6NDOptPREF64(prefix='12:34:56::', plc='/32').mysummary() == "ICMPv6 Neighbor Discovery Option - PREF64 Option 12:34:56::/32"
+ICMPv6NDOptPREF64(prefix='12:34:56::', plc=6).mysummary() == "ICMPv6 Neighbor Discovery Option - PREF64 Option 12:34:56::[invalid PLC(6)]"
 
 
 ############
@@ -1686,7 +1811,7 @@ raw(ICMPv6NIReplyRefuse())[:8] == b'\x8c\x01\x00\x00\x00\x00\x00\x00'
 
 = ICMPv6NIReplyRefuse - basic dissection
 a=ICMPv6NIReplyRefuse(b'\x8c\x01\x00\x00\x00\x00\x00\x00\xf1\xe9\xab\xc9\x8c\x0by\x18')
-a.type == 140 and a.code == 1 and a.cksum == 0 and a.unused == 0 and a.flags == 0 and a.nonce == b'\xf1\xe9\xab\xc9\x8c\x0by\x18' and a.data ==  None
+a.type == 140 and a.code == 1 and a.cksum == 0 and a.unused == 0 and a.flags == 0 and a.nonce == b'\xf1\xe9\xab\xc9\x8c\x0by\x18' and a.data == b""
 
 
 ############
@@ -1698,7 +1823,7 @@ raw(ICMPv6NIReplyUnknown(nonce=b'\x00'*8)) == b'\x8c\x02\x00\x00\x00\x00\x00\x00
 
 = ICMPv6NIReplyRefuse - basic dissection
 a=ICMPv6NIReplyRefuse(b'\x8c\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00')
-a.type == 140 and a.code == 2 and a.cksum == 0 and a.unused == 0 and a.flags == 0 and a.nonce == b'\x00'*8 and a.data ==  None
+a.type == 140 and a.code == 2 and a.cksum == 0 and a.unused == 0 and a.flags == 0 and a.nonce == b'\x00'*8 and a.data == b""
 
 
 ############
@@ -1761,17 +1886,17 @@ Ether in l
 
 = defragment6 - test against a large TCP packet fragmented with a 1280 bytes MTU and missing fragments
 l=fragment6(IPv6()/IPv6ExtHdrFragment()/TCP()/Raw(load="A"*40000), 1280) 
-del(l[2])
-del(l[4])
-del(l[12])
-del(l[18])
+del l[2]
+del l[4]
+del l[12]
+del l[18]
 raw(defragment6(l)) == (b'`\x00\x00\x00\x9cT\x06@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x14\x00P\x00\x00\x00\x00\x00\x00\x00\x00P\x02 \x00\xe92\x00\x00' + 2444*b'A' + 1232*b'X' + 2464*b'A' + 1232*b'X' + 9856*b'A' + 1232*b'X' + 7392*b'A' + 1232*b'X' + 12916*b'A')
 
 
 = defragment6 - test against a TCP packet fragmented with a 800 bytes MTU and missing fragments
 l=fragment6(IPv6()/IPv6ExtHdrFragment()/TCP()/Raw(load="A"*4000), 800) 
-del(l[4])
-del(l[2])
+del l[4]
+del l[2]
 raw(defragment6(l)) == b'`\x00\x00\x00\x0f\xb4\x06@\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x14\x00P\x00\x00\x00\x00\x00\x00\x00\x00P\x02 \x00\xb2\x0f\x00\x00AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 
 = defragment6 - test the packet length
@@ -1785,9 +1910,9 @@ assert defragment6(pkts).plen == 1508
 + Test Route6 class
 
 = Fake interfaces
-IFACES._add_fake_iface("eth0")
-IFACES._add_fake_iface("lo")
-IFACES._add_fake_iface("scapy0")
+conf.ifaces._add_fake_iface("eth0")
+conf.ifaces._add_fake_iface("lo")
+conf.ifaces._add_fake_iface("scapy0")
 
 = Route6 - Route6 flushing
 conf_iface = conf.iface
@@ -1835,9 +1960,9 @@ len_r6 = len(r6.routes)
 = Route6 - Route6.add & Route6.delt
 
 r6.add(dst="2001:db8:cafe:f000::/64", gw="2001:db8:cafe::1", dev="eth0")
-assert(len(r6.routes) == len_r6 + 1)
+assert len(r6.routes) == len_r6 + 1
 r6.delt(dst="2001:db8:cafe:f000::/64", gw="2001:db8:cafe::1")
-assert(len(r6.routes) == len_r6)
+assert len(r6.routes) == len_r6
 
 = Route6 - Route6.ifadd & Route6.ifdel
 r6.ifadd("scapy0", "2001:bd8:cafe:1::1/64")
@@ -2824,7 +2949,7 @@ p[MIP6MH_BE].cksum=0xba10 and p[MIP6MH_BE].len == 1 and len(p[MIP6MH_BE].options
 + TracerouteResult6
 
 = get_trace()
-ip6_hlim = [("2001:db8::%d" % i, i) for i in six.moves.range(1, 12)]
+ip6_hlim = [("2001:db8::%d" % i, i) for i in range(1, 12)]
 
 tr6_packets = [ (IPv6(dst="2001:db8::1", src="2001:db8::254", hlim=hlim)/UDP()/"scapy",
                  IPv6(dst="2001:db8::254", src=ip)/ICMPv6TimeExceeded()/IPerror6(dst="2001:db8::1", src="2001:db8::254", hlim=0)/UDPerror()/"scapy")
@@ -2853,7 +2978,7 @@ def test_show():
     expected += "11 2001:db8::11                               3         \n"
     index_result = result.index("\n1")
     index_expected = expected.index("\n1")
-    assert(result[index_result:] == expected[index_expected:])
+    assert result[index_result:] == expected[index_expected:]
 
 test_show()
 

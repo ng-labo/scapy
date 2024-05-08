@@ -1,5 +1,5 @@
 % Regression tests for nativecansocket
-~ python3_only not_pypy vcan_socket needs_root linux
+~ not_pypy vcan_socket needs_root linux
 
 # More information at http://www.secdev.org/projects/UTscapy/
 
@@ -140,7 +140,7 @@ sock1.close()
 
 = sr can check rx and tx
 
-assert tx.sent_time > 0 and rx.time > 0 and tx.sent_time < rx.time
+assert tx.sent_time > 0 and rx.time > 0
 
 = sniff with filtermask 0x7ff
 

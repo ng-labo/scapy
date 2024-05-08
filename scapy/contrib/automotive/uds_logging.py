@@ -1,7 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Nils Weiss <nils@we155.de>
-# This program is published under a GPLv2 license
 
 # scapy.contrib.description = UDS Ecu logging additions
 # scapy.contrib.status = library
@@ -14,8 +14,12 @@ from scapy.contrib.automotive.uds import UDS_DSCPR, UDS_ERPR, UDS_SAPR, \
     UDS_RTE, UDS_RTEPR, UDS_RFTPR, UDS_IOCBI, UDS_RDBI, UDS_RMBA, UDS_WDBI, \
     UDS_CDTCS, UDS_CDTCSPR, UDS_SDT, UDS_SDTPR, UDS_RUPR
 from scapy.packet import Packet
-from scapy.compat import Tuple, Any
 from scapy.contrib.automotive.ecu import Ecu
+
+from typing import (
+    Any,
+    Tuple,
+)
 
 
 @Ecu.extend_pkt_with_logging(UDS_DSC)

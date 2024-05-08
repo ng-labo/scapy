@@ -1,10 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# This file is part of Scapy
+# See https://scapy.net/ for more information
 # Copyright (C) 2018 Leonardo Monteiro <decastromonteiro@gmail.com>
 #               2017 Alexis Sultan    <alexis.sultan@sfr.com>
 #               2017 Alessio Deiana <adeiana@gmail.com>
 #               2014 Guillaume Valadon <guillaume.valadon@ssi.gouv.fr>
 #               2012 ffranz <ffranz@iniqua.com>
-##
-# This program is published under a GPLv2 license
 
 # scapy.contrib.description = GPRS Tunneling Protocol (GTP)
 # scapy.contrib.status = loads
@@ -16,7 +17,6 @@ Spec: 3GPP TS 29.060 and 3GPP TS 29.274
 Some IEs: 3GPP TS 24.008
 """
 
-from __future__ import absolute_import
 import struct
 
 from scapy.compat import chb, orb, bytes_encode
@@ -45,7 +45,6 @@ from scapy.fields import (
 from scapy.layers.inet import IP, UDP
 from scapy.layers.inet6 import IPv6, IP6Field
 from scapy.layers.ppp import PPP
-from scapy.modules.six.moves import range
 from scapy.packet import bind_layers, bind_bottom_up, bind_top_down, \
     Packet, Raw
 from scapy.volatile import RandInt, RandIP, RandNum, RandString
@@ -221,7 +220,7 @@ class GTP_ExtensionHeader(Packet):
 
 
 class GTP_UDPPort_ExtensionHeader(GTP_ExtensionHeader):
-    fields_desc = [ByteField("length", 0x40),
+    fields_desc = [ByteField("length", 0x01),
                    ShortField("udp_port", None),
                    ByteEnumField("next_ex", 0, ExtensionHeadersTypes), ]
 
@@ -258,7 +257,10 @@ class GTPHeader(Packet):
     def post_build(self, p, pay):
         p += pay
         if self.length is None:
-            tmp_len = len(p) - 8
+            # The message length field is calculated different in GTPv1 and GTPv2.  # noqa: E501
+            # For GTPv1 it is defined as the rest of the packet following the mandatory 8-byte GTP header  # noqa: E501
+            # For GTPv2 it is defined as the length of the message in bytes excluding the mandatory part of the GTP-C header (the first 4 bytes)  # noqa: E501
+            tmp_len = len(p) - 4 if self.version == 2 else len(p) - 8
             p = p[:2] + struct.pack("!H", tmp_len) + p[4:]
         return p
 
@@ -449,7 +451,7 @@ class IE_Base(Packet):
                 tmp_len = len(p)
                 if isinstance(self.payload, conf.padding_layer):
                     tmp_len += len(self.payload.load)
-                p = p[:1] + struct.pack("!H", tmp_len - 2) + p[3:]
+                p = p[:1] + struct.pack("!H", tmp_len - 4) + p[3:]
         return p + pay
 
 
@@ -873,7 +875,7 @@ class IE_PrivateExtension(IE_Base):
     name = "Private Extension"
     fields_desc = [ByteEnumField("ietype", 255, IEType),
                    ShortField("length", 1),
-                   ByteField("extension identifier", 0),
+                   ByteField("extension_identifier", 0),
                    StrLenField("extention_value", "",
                                length_from=lambda x: x.length)]
 
@@ -1022,6 +1024,9 @@ class GTPDeletePDPContextResponse(Packet):
     # 3GPP TS 29.060 V9.1.0 (2009-12)
     name = "GTP Delete PDP Context Response"
     fields_desc = [PacketListField("IE_list", [], IE_Dispatcher)]
+
+    def answers(self, other):
+        return isinstance(other, GTPDeletePDPContextRequest)
 
 
 class GTPPDUNotificationRequest(Packet):

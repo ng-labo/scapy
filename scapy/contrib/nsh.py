@@ -1,16 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 # This file is part of Scapy
-# Scapy is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 2 of the License, or
-# any later version.
-#
-# Scapy is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Scapy. If not, see <http://www.gnu.org/licenses/>.
+# See https://scapy.net/ for more information
 
 # scapy.contrib.description = Network Services Headers (NSH)
 # scapy.contrib.status = loads
@@ -37,7 +27,7 @@ class NSHTLV(Packet):
     "NSH MD-type 2 - Variable Length Context Headers"
     name = "NSHTLV"
     fields_desc = [
-        ShortField('class', 0),
+        ShortField('class_', 0),
         BitField('type', 0, 8),
         BitField('reserved', 0, 1),
         BitField('length', 0, 7),
@@ -85,7 +75,7 @@ class NSH(Packet):
 
 
 bind_layers(Ether, NSH, {'type': 0x894F}, type=0x894F)
-bind_layers(VXLAN, NSH, {'flags': 0xC, 'nextproto': 4}, nextproto=4)
+bind_layers(VXLAN, NSH, {'flags': 0xC, 'NextProtocol': 4}, NextProtocol=4)
 bind_layers(GRE, NSH, {'proto': 0x894F}, proto=0x894F)
 
 bind_layers(NSH, IP, nextproto=1)

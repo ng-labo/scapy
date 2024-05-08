@@ -1,8 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
-
 # Copyright (C) 2005  Guillaume Valadon <guedou@hongo.wide.ad.jp>
 #                     Arnaud Ebalard <arnaud.ebalard@eads.net>
 
@@ -14,7 +13,6 @@ Routing and network interface handling for IPv6.
 #                        Routing/Interfaces stuff                           #
 #############################################################################
 
-from __future__ import absolute_import
 import socket
 from scapy.config import conf
 from scapy.interfaces import resolve_iface, NetworkInterface
@@ -27,7 +25,7 @@ from scapy.pton_ntop import inet_pton, inet_ntop
 from scapy.error import warning, log_loading
 from scapy.utils import pretty_list
 
-from scapy.compat import (
+from typing import (
     Any,
     Dict,
     List,
@@ -42,8 +40,11 @@ class Route6:
 
     def __init__(self):
         # type: () -> None
-        self.resync()
+        self.routes = []  # type: List[Tuple[str, int, str, str, List[str], int]]  # noqa: E501
+        self.ipv6_ifaces = set()  # type: Set[Union[str, NetworkInterface]]
         self.invalidate_cache()
+        if conf.route6_autoload:
+            self.resync()
 
     def invalidate_cache(self):
         # type: () -> None
@@ -52,8 +53,8 @@ class Route6:
     def flush(self):
         # type: () -> None
         self.invalidate_cache()
-        self.ipv6_ifaces = set()  # type: Set[Union[str, NetworkInterface]]
-        self.routes = []  # type: List[Tuple[str, int, str, str, List[str], int]]  # noqa: E501
+        self.routes.clear()
+        self.ipv6_ifaces.clear()
 
     def resync(self):
         # type: () -> None
@@ -158,7 +159,7 @@ class Route6:
             i = self.routes.index(to_del[0])
             self.invalidate_cache()
             self.remove_ipv6_iface(self.routes[i][3])
-            del(self.routes[i])
+            del self.routes[i]
 
     def ifchange(self, iff, addr):
         # type: (str, str) -> None

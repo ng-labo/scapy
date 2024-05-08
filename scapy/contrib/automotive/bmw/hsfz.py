@@ -1,24 +1,32 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Nils Weiss <nils@we155.de>
-# This program is published under a GPLv2 license
 
 # scapy.contrib.description = HSFZ - BMW High-Speed-Fahrzeug-Zugang
 # scapy.contrib.status = loads
-
-
+import logging
 import struct
 import socket
 import time
 
-from scapy.compat import Optional, Tuple, Type
-
+from scapy.contrib.automotive import log_automotive
 from scapy.packet import Packet, bind_layers, bind_bottom_up
 from scapy.fields import IntField, ShortEnumField, XByteField
 from scapy.layers.inet import TCP
 from scapy.supersocket import StreamSocket
-from scapy.contrib.automotive.uds import UDS
+from scapy.contrib.automotive.uds import UDS, UDS_TP
 from scapy.data import MTU
+
+from typing import (
+    Any,
+    Optional,
+    Tuple,
+    Type,
+    Iterable,
+    List,
+    Union,
+)
 
 
 """
@@ -79,6 +87,27 @@ class HSFZSocket(StreamSocket):
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.connect((self.ip, self.port))
         StreamSocket.__init__(self, s, HSFZ)
+        self.buffer = b""
+
+    def recv(self, x=MTU, **kwargs):
+        # type: (Optional[int], **Any) -> Optional[Packet]
+        if self.buffer:
+            len_data = self.buffer[:4]
+        else:
+            len_data = self.ins.recv(4, socket.MSG_PEEK)
+            if len(len_data) != 4:
+                return None
+
+        len_int = struct.unpack(">I", len_data)[0]
+        len_int += 6
+        self.buffer += self.ins.recv(len_int - len(self.buffer))
+
+        if len(self.buffer) != len_int:
+            return None
+
+        pkt = self.basecls(self.buffer, **kwargs)  # type: Packet
+        self.buffer = b""
+        return pkt
 
 
 class UDS_HSFZSocket(HSFZSocket):
@@ -97,13 +126,66 @@ class UDS_HSFZSocket(HSFZSocket):
         except AttributeError:
             pass
 
-        return super(UDS_HSFZSocket, self).send(
-            HSFZ(src=self.src, dst=self.dst) / x)
+        try:
+            return super(UDS_HSFZSocket, self).send(
+                HSFZ(src=self.src, dst=self.dst) / x)
+        except Exception as e:
+            # Workaround:
+            # This catch block is currently necessary to detect errors
+            # during send. In automotive application it's not uncommon that
+            # a destination socket goes down. If any function based on
+            # SndRcvHandler is used, all exceptions are silently handled
+            # in the send part. This means, a caller of the SndRcvHandler
+            # can not detect if an error occurred. This workaround closes
+            # the socket if a send error was detected.
+            log_automotive.exception("Exception: %s", e)
+            self.close()
+            return 0
 
-    def recv(self, x=MTU):
-        # type: (int) -> Optional[Packet]
+    def recv(self, x=MTU, **kwargs):
+        # type: (Optional[int], **Any) -> Optional[Packet]
         pkt = super(UDS_HSFZSocket, self).recv(x)
         if pkt:
-            return self.outputcls(bytes(pkt.payload))
+            return self.outputcls(bytes(pkt.payload), **kwargs)
         else:
             return pkt
+
+
+def hsfz_scan(ip,  # type: str
+              scan_range=range(0x100),  # type: Iterable[int]
+              src=0xf4,  # type: int
+              timeout=0.1,  # type: Union[int, float]
+              verbose=True  # type: bool
+              ):
+    # type: (...) -> List[UDS_HSFZSocket]
+    """
+    Helper function to scan for HSFZ endpoints.
+
+    Example:
+        >>> sockets = hsfz_scan("192.168.0.42")
+
+    :param ip: IPv4 address of target to scan
+    :param scan_range: Range for HSFZ destination address
+    :param src: HSFZ source address, used during the scan
+    :param timeout: Timeout for each request
+    :param verbose: Show information during scan, if True
+    :return: A list of open UDS_HSFZSockets
+    """
+    if verbose:
+        log_automotive.setLevel(logging.DEBUG)
+    results = list()
+    for i in scan_range:
+        with UDS_HSFZSocket(src, i, ip) as sock:
+            try:
+                resp = sock.sr1(UDS() / UDS_TP(),
+                                timeout=timeout,
+                                verbose=False)
+                if resp:
+                    results.append((i, resp))
+                if resp:
+                    log_automotive.debug(
+                        "Found endpoint %s, src=0x%x, dst=0x%x" % (ip, src, i))
+            except Exception as e:
+                log_automotive.exception(
+                    "Error %s at destination address 0x%x" % (e, i))
+    return [UDS_HSFZSocket(0xf4, dst, ip) for dst, _ in results]

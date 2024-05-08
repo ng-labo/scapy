@@ -1,8 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
-# Copyright (C) Philippe Biondi <phil@secdev.org>
-# Copyright (C) Gabriel Potter <gabriel@potter.fr>
-# This program is published under a GPLv2 license
+# See https://scapy.net/ for more information
+# Copyright (C) Gabriel Potter <gabriel[]potter[]fr>
 
 # flake8: noqa E266
 # (We keep comment boxes, it's then one-line comments)
@@ -13,13 +12,30 @@ C API calls to Windows DLLs
 
 import ctypes
 import ctypes.wintypes
-from ctypes import Structure, POINTER, byref, create_string_buffer, WINFUNCTYPE
+from ctypes import (
+    POINTER,
+    Structure,
+    WINFUNCTYPE,
+    byref,
+    create_string_buffer,
+)
+from socket import AddressFamily
 
 from scapy.config import conf
 from scapy.consts import WINDOWS_XP
+from scapy.data import MTU
+
+# Typing imports
+from typing import (
+    Any,
+    Dict,
+    IO,
+    List,
+    Optional,
+    Tuple,
+)
 
 ANY_SIZE = 65500  # FIXME quite inefficient :/
-AF_UNSPEC = 0
 NO_ERROR = 0x0
 
 CHAR = ctypes.c_char
@@ -29,6 +45,7 @@ BOOLEAN = ctypes.wintypes.BOOLEAN
 ULONG = ctypes.wintypes.ULONG
 ULONGLONG = ctypes.c_ulonglong
 HANDLE = ctypes.wintypes.HANDLE
+LPVOID = ctypes.wintypes.LPVOID
 LPWSTR = ctypes.wintypes.LPWSTR
 VOID = ctypes.c_void_p
 INT = ctypes.c_int
@@ -47,6 +64,7 @@ USHORT = ctypes.c_ushort
 
 
 def _resolve_list(list_obj):
+    # type: (Any) -> List[Dict[str, Any]]
     current = list_obj
     _list = []
     while current and hasattr(current, "contents"):
@@ -56,7 +74,8 @@ def _resolve_list(list_obj):
 
 
 def _struct_to_dict(struct_obj):
-    results = {}
+    # type: (Any) -> Dict[str, Any]
+    results = {}  # type: Dict[str, Any]
     for fname, ctype in struct_obj.__class__._fields_:
         val = getattr(struct_obj, fname)
         if fname == "next":
@@ -83,8 +102,11 @@ _winapi_SetConsoleTitle.restype = BOOL
 _winapi_SetConsoleTitle.argtypes = [LPWSTR]
 
 def _windows_title(title=None):
-    """Updates the terminal title with the default one or with `title`
-    if provided."""
+    # type: (Optional[str]) -> None
+    """
+    Updates the terminal title with the default one or with `title`
+    if provided.
+    """
     if conf.interactive:
         _winapi_SetConsoleTitle(title or "Scapy v{}".format(conf.version))
 
@@ -119,6 +141,7 @@ QueryServiceStatus.restype = BOOL
 QueryServiceStatus.argtypes = [SC_HANDLE, POINTER(SERVICE_STATUS)]
 
 def get_service_status(service):
+    # type: (str) -> Dict[str, int]
     """Returns content of QueryServiceStatus for a service"""
     SERVICE_QUERY_STATUS = 0x0004
     schSCManager = OpenSCManagerW(
@@ -221,11 +244,12 @@ _GetIcmpStatistics = WINFUNCTYPE(ULONG, PMIB_ICMP)(
 
 
 def GetIcmpStatistics():
+    # type: () -> Dict[str, Dict[str, Dict[str, int]]]
     """Return all Windows ICMP stats from iphlpapi"""
     statistics = MIB_ICMP()
     _GetIcmpStatistics(byref(statistics))
     results = _struct_to_dict(statistics)
-    del(statistics)
+    del statistics
     return results
 
 ##############################
@@ -432,7 +456,8 @@ _GetAdaptersAddresses = WINFUNCTYPE(ULONG, ULONG, ULONG,
                                         ('GetAdaptersAddresses', iphlpapi))
 
 
-def GetAdaptersAddresses(AF=AF_UNSPEC):
+def GetAdaptersAddresses(AF=AddressFamily.AF_UNSPEC):
+    # type: (int) -> List[Dict[str, Any]]
     """Return all Windows Adapters addresses from iphlpapi"""
     # We get the size first
     size = ULONG()
@@ -453,7 +478,7 @@ def GetAdaptersAddresses(AF=AF_UNSPEC):
     if res != NO_ERROR:
         raise RuntimeError("Error retrieving table (%d)" % res)
     results = _resolve_list(AdapterAddresses)
-    del(AdapterAddresses)
+    del AdapterAddresses
     return results
 
 ##############################
@@ -495,6 +520,7 @@ _GetIpForwardTable = WINFUNCTYPE(DWORD,
 
 
 def GetIpForwardTable():
+    # type: () -> List[Dict[str, Any]]
     """Return all Windows routes (IPv4 only) from iphlpapi"""
     # We get the size first
     size = ULONG()
@@ -512,7 +538,7 @@ def GetIpForwardTable():
     results = []
     for i in range(pIpForwardTable.contents.NumEntries):
         results.append(_struct_to_dict(pIpForwardTable.contents.Table[i]))
-    del(pIpForwardTable)
+    del pIpForwardTable
     return results
 
 ### V2 ###
@@ -571,7 +597,8 @@ if not WINDOWS_XP:
     )
 
 
-def GetIpForwardTable2(AF=AF_UNSPEC):
+def GetIpForwardTable2(AF=AddressFamily.AF_UNSPEC):
+    # type: (AddressFamily) -> List[Dict[str, Any]]
     """Return all Windows routes (IPv4/IPv6) from iphlpapi"""
     if WINDOWS_XP:
         raise OSError("Not available on Windows XP !")
@@ -584,3 +611,61 @@ def GetIpForwardTable2(AF=AF_UNSPEC):
         results.append(_struct_to_dict(table.contents.Table[i]))
     _FreeMibTable(table)
     return results
+
+
+##############
+#### FIFO ####
+##############
+
+class _SECURITY_ATTRIBUTES(Structure):
+    _fields_ = [("nLength", DWORD),
+                ("lpSecurityDescriptor", LPVOID),
+                ("bInheritHandle", BOOL)]
+
+
+LPSECURITY_ATTRIBUTES = POINTER(_SECURITY_ATTRIBUTES)
+
+
+def _get_win_fifo() -> Tuple[str, Any]:
+    """Create a windows fifo and returns the (client file, server fd)
+    """
+    from scapy.volatile import RandString
+    f = r"\\.\pipe\scapy%s" % str(RandString(6))
+    buffer = create_string_buffer(ctypes.sizeof(_SECURITY_ATTRIBUTES))
+    sec = ctypes.cast(buffer, LPSECURITY_ATTRIBUTES)
+    sec.contents.nLength = ctypes.sizeof(_SECURITY_ATTRIBUTES)
+    res = ctypes.windll.kernel32.CreateNamedPipeA(
+        create_string_buffer(f.encode()),
+        0x00000003 | 0x40000000,
+        0,
+        1, 65536, 65536,
+        300,
+        sec,
+    )
+    if res == -1:
+        raise OSError(ctypes.FormatError())
+    return f, res
+
+
+def _win_fifo_open(fd: Any) -> IO[bytes]:
+    """Connect NamedPipe and return a fake open() file
+    """
+    ctypes.windll.kernel32.ConnectNamedPipe(fd, None)
+
+    class _opened(IO[bytes]):
+        def read(self, x: int = MTU) -> bytes:
+            buf = ctypes.create_string_buffer(x)
+            res = ctypes.windll.kernel32.ReadFile(
+                fd,
+                buf,
+                x,
+                None,
+                None,
+            )
+            if res == 0:
+                raise OSError(ctypes.FormatError())
+            return buf.raw
+        def close(self) -> None:
+            # ignore failures
+            ctypes.windll.kernel32.CloseHandle(fd)
+    return _opened()  # type: ignore

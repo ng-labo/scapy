@@ -869,10 +869,12 @@ Legend:
     XShortField
     
     X3BytesField        # three bytes as hex
-    LEX3BytesField      # little endian three bytes as hex
+    XLE3BytesField      # little endian three bytes as hex
     ThreeBytesField     # three bytes as decimal
     LEThreeBytesField   # little endian three bytes as decimal
-    
+    LE3BytesEnumField
+    XLE3BytesEnumField
+
     IntField
     SignedIntField
     LEIntField
@@ -1136,6 +1138,7 @@ Field naming convention
 -----------------------
 The goal is to keep the writing of packets fluent and intuitive. The basic instructions are the following :
 
+* Do not use any value from the ``Packet.__slots__``` list as a field name (such as name, time or original), as they are reserved for Scapy internals
 * Use inverted camel case and common abbreviations (e.g. len, src, dst, dstPort, srcIp).
 * Wherever it is either possible or relevant, prefer using the names from the specifications. This aims to help newcomers to easily forge packets.
 

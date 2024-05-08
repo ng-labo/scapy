@@ -1,23 +1,21 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# Modified by Maxence Tury <maxence.tury@ssi.gouv.fr>
-# This program is published under a GPLv2 license
+# Acknowledgment: Maxence Tury <maxence.tury@ssi.gouv.fr>
 
 """
 Management Information Base (MIB) parsing
 """
 
-from __future__ import absolute_import
 import re
 from glob import glob
 from scapy.dadict import DADict, fixname
 from scapy.config import conf
 from scapy.utils import do_graph
-import scapy.modules.six as six
 from scapy.compat import plain_str
 
-from scapy.compat import (
+from typing import (
     Any,
     Dict,
     List,
@@ -31,7 +29,8 @@ from scapy.compat import (
 
 _mib_re_integer = re.compile(r"^[0-9]+$")
 _mib_re_both = re.compile(r"^([a-zA-Z_][a-zA-Z0-9_-]*)\(([0-9]+)\)$")
-_mib_re_oiddecl = re.compile(r"$\s*([a-zA-Z0-9_-]+)\s+OBJECT([^:\{\}]|\{[^:]+\})+::=\s*\{([^\}]+)\}", re.M)  # noqa: E501
+_mib_re_oiddecl = re.compile(
+    r"$\s*([a-zA-Z0-9_-]+)\s+OBJECT[^:\{\}]+::=\s*\{([^\}]+)\}", re.M)
 _mib_re_strings = re.compile(r'"[^"]*"')
 _mib_re_comments = re.compile(r'--.*(\r|\n)')
 
@@ -47,7 +46,7 @@ class MIBDict(DADict[str, str]):
         max = 0
         root = "."
         root_key = ""
-        for k in six.iterkeys(self):
+        for k in self:
             if x.startswith(k + "."):
                 if max < len(k):
                     max = len(k)
@@ -68,9 +67,9 @@ class MIBDict(DADict[str, str]):
         p = len(xl) - 1
         while p >= 0 and _mib_re_integer.match(xl[p]):
             p -= 1
-        if p != 0 or xl[p] not in six.itervalues(self.d):
+        if p != 0 or xl[p] not in self.d.values():
             return x
-        xl[p] = next(k for k, v in six.iteritems(self.d) if v == xl[p])
+        xl[p] = next(k for k, v in self.d.items() if v == xl[p])
         return ".".join(xl[p:])
 
     def _make_graph(self, other_keys=None, **kargs):
@@ -145,8 +144,8 @@ def _mib_register(ident,  # type: str
             k = keys[i]
             if _mib_register(k, unresolved[k], the_mib, {}, alias):
                 # Now resolved: we can remove it from unresolved
-                del(unresolved[k])
-                del(keys[i])
+                del unresolved[k]
+                del keys[i]
                 i = 0
             else:
                 i += 1
@@ -163,7 +162,7 @@ def load_mib(filenames):
     unresolved = {}  # type: Dict[str, List[str]]
     alias = {}  # type: Dict[str, str]
     # Export the current MIB to a working dictionary
-    for k in six.iterkeys(conf.mib):
+    for k in conf.mib:
         _mib_register(conf.mib[k], k.split("."), the_mib, unresolved, alias)
 
     # Read the files
@@ -192,14 +191,14 @@ def load_mib(filenames):
     # Create the new MIB
     newmib = MIBDict(_name="MIB")
     # Add resolved values
-    for oid, key in six.iteritems(the_mib):
+    for oid, key in the_mib.items():
         newmib[".".join(key)] = oid
     # Add unresolved values
-    for oid, key in six.iteritems(unresolved):
+    for oid, key in unresolved.items():
         newmib[".".join(key)] = oid
     # Add aliases
-    for key, oid in six.iteritems(alias):
-        newmib[key] = oid
+    for key_s, oid in alias.items():
+        newmib[key_s] = oid
 
     conf.mib = newmib
 
@@ -366,16 +365,16 @@ attributeType_oids = {
 }
 
 certificateExtension_oids = {
-    "2.5.29.1": "authorityKeyIdentifier",
+    "2.5.29.1": "authorityKeyIdentifier(obsolete)",
     "2.5.29.2": "keyAttributes",
-    "2.5.29.3": "certificatePolicies",
+    "2.5.29.3": "certificatePolicies(obsolete)",
     "2.5.29.4": "keyUsageRestriction",
     "2.5.29.5": "policyMapping",
     "2.5.29.6": "subtreesConstraint",
-    "2.5.29.7": "subjectAltName",
-    "2.5.29.8": "issuerAltName",
+    "2.5.29.7": "subjectAltName(obsolete)",
+    "2.5.29.8": "issuerAltName(obsolete)",
     "2.5.29.9": "subjectDirectoryAttributes",
-    "2.5.29.10": "basicConstraints",
+    "2.5.29.10": "basicConstraints(obsolete)",
     "2.5.29.14": "subjectKeyIdentifier",
     "2.5.29.15": "keyUsage",
     "2.5.29.16": "privateKeyUsagePeriod",
@@ -387,8 +386,8 @@ certificateExtension_oids = {
     "2.5.29.22": "expirationDate",
     "2.5.29.23": "instructionCode",
     "2.5.29.24": "invalidityDate",
-    "2.5.29.25": "cRLDistributionPoints",
-    "2.5.29.26": "issuingDistributionPoint",
+    "2.5.29.25": "cRLDistributionPoints(obsolete)",
+    "2.5.29.26": "issuingDistributionPoint(obsolete)",
     "2.5.29.27": "deltaCRLIndicator",
     "2.5.29.28": "issuingDistributionPoint",
     "2.5.29.29": "certificateIssuer",
@@ -396,7 +395,7 @@ certificateExtension_oids = {
     "2.5.29.31": "cRLDistributionPoints",
     "2.5.29.32": "certificatePolicies",
     "2.5.29.33": "policyMappings",
-    "2.5.29.34": "policyConstraints",
+    "2.5.29.34": "policyConstraints(obsolete)",
     "2.5.29.35": "authorityKeyIdentifier",
     "2.5.29.36": "policyConstraints",
     "2.5.29.37": "extKeyUsage",
@@ -569,19 +568,19 @@ evPolicy_oids = {
     '1.2.392.200091.100.721.1': 'EV Security Communication RootCA1',
     '1.2.616.1.113527.2.5.1.1': 'EV Certum Trusted Network CA',
     '1.3.159.1.17.1': 'EV Actualis Authentication Root CA',
-    '1.3.6.1.4.1.13177.10.1.3.10': 'EV Autoridad de Certificacion Firmaprofesional CIF A62634068',  # noqa: E501
+    '1.3.6.1.4.1.13177.10.1.3.10': 'EV Autoridad de Certificacion Firmaprofesional CIF A62634068',
     '1.3.6.1.4.1.14370.1.6': 'EV GeoTrust Primary Certification Authority',
     '1.3.6.1.4.1.14777.6.1.1': 'EV Izenpe.com roots Business',
     '1.3.6.1.4.1.14777.6.1.2': 'EV Izenpe.com roots Government',
-    '1.3.6.1.4.1.17326.10.14.2.1.2': 'EV AC Camerfirma S.A. Chambers of Commerce Root - 2008',  # noqa: E501
-    '1.3.6.1.4.1.17326.10.14.2.2.2': 'EV AC Camerfirma S.A. Chambers of Commerce Root - 2008',  # noqa: E501
-    '1.3.6.1.4.1.17326.10.8.12.1.2': 'EV AC Camerfirma S.A. Global Chambersign Root - 2008',  # noqa: E501
-    '1.3.6.1.4.1.17326.10.8.12.2.2': 'EV AC Camerfirma S.A. Global Chambersign Root - 2008',  # noqa: E501
-    '1.3.6.1.4.1.22234.2.5.2.3.1': 'EV CertPlus Class 2 Primary CA (KEYNECTIS)',  # noqa: E501
+    '1.3.6.1.4.1.17326.10.14.2.1.2': 'EV AC Camerfirma S.A. Chambers of Commerce Root - 2008',
+    '1.3.6.1.4.1.17326.10.14.2.2.2': 'EV AC Camerfirma S.A. Chambers of Commerce Root - 2008',
+    '1.3.6.1.4.1.17326.10.8.12.1.2': 'EV AC Camerfirma S.A. Global Chambersign Root - 2008',
+    '1.3.6.1.4.1.17326.10.8.12.2.2': 'EV AC Camerfirma S.A. Global Chambersign Root - 2008',
+    '1.3.6.1.4.1.22234.2.5.2.3.1': 'EV CertPlus Class 2 Primary CA (KEYNECTIS)',
     '1.3.6.1.4.1.23223.1.1.1': 'EV StartCom Certification Authority',
-    '1.3.6.1.4.1.29836.1.10': 'EV China Internet Network Information Center EV Certificates Root',  # noqa: E501
+    '1.3.6.1.4.1.29836.1.10': 'EV China Internet Network Information Center EV Certificates Root',
     '1.3.6.1.4.1.311.60.2.1.1': 'jurisdictionOfIncorporationLocalityName',
-    '1.3.6.1.4.1.311.60.2.1.2': 'jurisdictionOfIncorporationStateOrProvinceName',  # noqa: E501
+    '1.3.6.1.4.1.311.60.2.1.2': 'jurisdictionOfIncorporationStateOrProvinceName',
     '1.3.6.1.4.1.311.60.2.1.3': 'jurisdictionOfIncorporationCountryName',
     '1.3.6.1.4.1.34697.2.1': 'EV AffirmTrust Commercial',
     '1.3.6.1.4.1.34697.2.2': 'EV AffirmTrust Networking',
@@ -605,12 +604,24 @@ evPolicy_oids = {
     '2.16.840.1.113733.1.7.23.6': 'EV VeriSign Certification Authorities',
     '2.16.840.1.113733.1.7.48.1': 'EV thawte CAs',
     '2.16.840.1.114028.10.1.2': 'EV Entrust Certification Authority',
-    '2.16.840.1.114171.500.9': 'EV Wells Fargo WellsSecure Public Root Certification Authority',  # noqa: E501
+    '2.16.840.1.114171.500.9': 'EV Wells Fargo WellsSecure Public Root Certification Authority',
     '2.16.840.1.114404.1.1.2.4.1': 'EV XRamp Global Certification Authority',
     '2.16.840.1.114412.2.1': 'EV DigiCert High Assurance EV Root CA',
-    '2.16.840.1.114413.1.7.23.3': 'EV ValiCert Class 2 Policy Validation Authority',  # noqa: E501
+    '2.16.840.1.114413.1.7.23.3': 'EV ValiCert Class 2 Policy Validation Authority',
     '2.16.840.1.114414.1.7.23.3': 'EV Starfield Certificate Authority',
-    '2.16.840.1.114414.1.7.24.3': 'EV Starfield Service Certificate Authority'  # noqa: E501
+    '2.16.840.1.114414.1.7.24.3': 'EV Starfield Service Certificate Authority'
+}
+
+#       gssapi       #
+
+gssapi_oids = {
+    '1.2.840.48018.1.2.2': 'MS KRB5 - Microsoft Kerberos 5',
+    '1.2.840.113554.1.2.2': 'Kerberos 5',
+    '1.2.840.113554.1.2.2.3': 'Kerberos 5 - User to User',
+    '1.3.6.1.5.2.5': 'Kerberos 5 - IAKERB',
+    '1.3.6.1.5.5.2': 'SPNEGO - Simple Protected Negotiation',
+    '1.3.6.1.4.1.311.2.2.10': 'NTLMSSP - Microsoft NTLM Security Support Provider',
+    '1.3.6.1.4.1.311.2.2.30': 'NEGOEX - SPNEGO Extended Negotiation Security Mechanism',
 }
 
 
@@ -630,7 +641,8 @@ x509_oids_sets = [
     x962KeyType_oids,
     x962Signature_oids,
     ansiX962Curve_oids,
-    certicomCurve_oids
+    certicomCurve_oids,
+    gssapi_oids,
 ]
 
 x509_oids = {}

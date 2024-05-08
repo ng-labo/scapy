@@ -1,8 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
+# See https://scapy.net/ for more information
 # Copyright (C) 2007, 2008, 2009 Arnaud Ebalard <arno@natisbad.com>
 #               2015, 2016, 2017 Maxence Tury <maxence.tury@ssi.gouv.fr>
 #               2019 Romain Perez
-# This program is published under a GPLv2 license
 
 """
 Tools for handling TLS sessions and digital certificates.
@@ -53,6 +54,8 @@ Unit tests:
 
     - Test our TLS client against our TLS server (s_server is unscriptable).
 
+    - Test our TLS client against python's SSL Socket wrapper (for TLS 1.3)
+
 
 TODO list (may it be carved away by good souls):
 
@@ -75,15 +78,10 @@ TODO list (may it be carved away by good souls):
         - Allow the server to store both one RSA key and one ECDSA key, and
           select the right one to use according to the ClientHello suites.
 
-        - Find a way to shutdown the automatons sockets properly without
-          simultaneously breaking the unit tests.
-
 
     - Miscellaneous:
 
         - Define several Certificate Transparency objects.
-
-        - Add the extended master secret and encrypt-then-mac logic.
 
         - Mostly unused features : DSS, fixed DH, SRP, char2 curves...
 """

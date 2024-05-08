@@ -10,14 +10,28 @@ scapy/__main__.py
 scapy/all.py
 scapy/ansmachine.py
 scapy/arch/__init__.py
+scapy/arch/bpf/__init__.py
+scapy/arch/bpf/consts.py
+scapy/arch/bpf/core.py
+scapy/arch/bpf/supersocket.py
 scapy/arch/common.py
-scapy/arch/linux.py
+scapy/arch/libpcap.py
+scapy/arch/linux/__init__.py
+scapy/arch/linux/rtnetlink.py
+scapy/arch/solaris.py
 scapy/arch/unix.py
+scapy/arch/windows/__init__.py
+scapy/arch/windows/native.py
+scapy/arch/windows/structures.py
+scapy/as_resolvers.py
+scapy/asn1/__init__.py
 scapy/asn1/asn1.py
 scapy/asn1/ber.py
 scapy/asn1/mib.py
 scapy/asn1fields.py
 scapy/asn1packet.py
+scapy/automaton.py
+scapy/autorun.py
 scapy/base_classes.py
 scapy/compat.py
 scapy/config.py
@@ -25,21 +39,23 @@ scapy/consts.py
 scapy/dadict.py
 scapy/data.py
 scapy/error.py
-scapy/extlib.py
 scapy/fields.py
 scapy/interfaces.py
 scapy/main.py
 scapy/packet.py
+scapy/pipetool.py
 scapy/plist.py
 scapy/pton_ntop.py
 scapy/route.py
 scapy/route6.py
+scapy/scapypipes.py
 scapy/sendrecv.py
 scapy/sessions.py
 scapy/supersocket.py
 scapy/themes.py
 scapy/utils.py
 scapy/utils6.py
+scapy/volatile.py
 
 # LAYERS
 scapy/layers/can.py
@@ -63,6 +79,7 @@ scapy/contrib/automotive/scanner/staged_test_case.py
 scapy/contrib/automotive/scanner/test_case.py
 scapy/contrib/automotive/uds_ecu_states.py
 scapy/contrib/automotive/uds_logging.py
+scapy/contrib/automotive/uds_scan.py
 scapy/contrib/cansocket_native.py
 scapy/contrib/cansocket_python_can.py
 #scapy/contrib/http2.py  # needs to be fixed
@@ -72,3 +89,19 @@ scapy/contrib/isotp/isotp_scanner.py
 scapy/contrib/isotp/isotp_soft_socket.py
 scapy/contrib/isotp/isotp_utils.py
 scapy/contrib/roce.py
+scapy/contrib/tcpao.py
+
+# LIBS
+scapy/libs/__init__.py
+scapy/libs/ethertypes.py
+scapy/libs/extcap.py
+scapy/libs/matplot.py
+scapy/libs/rfc3961.py
+scapy/libs/structures.py
+scapy/libs/test_pyx.py
+
+# TEST
+test/testsocket.py
+
+# TOOLS
+scapy/tools/automotive/isotpscanner.py

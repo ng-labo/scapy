@@ -1,14 +1,12 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
 
 """
 Clone of p0f v3 passive OS fingerprinting
 """
 
-from __future__ import absolute_import
-from __future__ import print_function
 import re
 import struct
 import random
@@ -22,8 +20,6 @@ from scapy.layers.http import HTTP, HTTPRequest, HTTPResponse
 from scapy.layers.inet6 import IPv6
 from scapy.volatile import RandByte, RandShort, RandString
 from scapy.error import warning
-from scapy.modules.six import integer_types, string_types
-from scapy.modules.six.moves import range
 
 _p0fpaths = ["/etc/p0f", "/usr/share/p0f", "/opt/local"]
 conf.p0f_base = select_path(_p0fpaths, "p0f.fp")
@@ -779,7 +775,7 @@ def p0f_impersonate(pkt, osgenre=None, osdetails=None, signature=None,
     tcp_type = tcp.flags & (0x02 | 0x10)  # SYN / SYN+ACK
 
     if signature:
-        if isinstance(signature, string_types):
+        if isinstance(signature, str):
             sig, _ = TCP_Signature.from_raw_sig(signature)
         else:
             raise TypeError("Unsupported signature type")
@@ -835,7 +831,7 @@ def p0f_impersonate(pkt, osgenre=None, osdetails=None, signature=None,
     # Take the options already set as "hints" to use in the new packet if we
     # can. we'll use the already-set values if they're valid integers.
     def int_only(val):
-        return val if isinstance(val, integer_types) else None
+        return val if isinstance(val, int) else None
     orig_opts = dict(tcp.options)
     mss_hint = int_only(orig_opts.get("MSS"))
     ws_hint = int_only(orig_opts.get("WScale"))
@@ -854,7 +850,7 @@ def p0f_impersonate(pkt, osgenre=None, osdetails=None, signature=None,
                 if mss_hint and 0 <= mss_hint <= maxmss:
                     options.append(("MSS", mss_hint))
                 else:  # invalid hint, generate new value
-                    options.append(("MSS", random.randint(1, maxmss)))
+                    options.append(("MSS", random.randint(100, maxmss)))
             else:
                 options.append(("MSS", sig.mss))
 

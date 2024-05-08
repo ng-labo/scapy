@@ -1,8 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Nils Weiss <nils@we155.de>
 # Copyright (C) Jonas Schmidt <jonas.schmidt@st.othr.de>
-# This program is published under a GPLv2 license
 
 # scapy.contrib.description = Volkswagen specific definitions for UDS
 # scapy.contrib.status = skip
@@ -3155,16 +3155,16 @@ UDS_RDBI.dataIdentifiers[0xf1d5] = "FDS_project_data"
 UDS_RDBI.dataIdentifiers[0xf1df] = "ECU Programming Information"
 
 
-UDS_RC.routineControlTypes[0x0202] = "Check Memory"
-UDS_RC.routineControlTypes[0x0203] = "Check Programming Preconditions"
-UDS_RC.routineControlTypes[0x0317] = "Reset of Adaption Values"
-UDS_RC.routineControlTypes[0x0366] = "Reset of all Adaptions"
-UDS_RC.routineControlTypes[0x03e7] = "Reset to Factory Settings"
-UDS_RC.routineControlTypes[0x045a] = "Clear user defined DTC information"
-UDS_RC.routineControlTypes[0x0544] = "Verify partial software checksum"
-UDS_RC.routineControlTypes[0x0594] = "Check upload preconditions"
-UDS_RC.routineControlTypes[0xff00] = "Erase Memory"
-UDS_RC.routineControlTypes[0xff01] = "Check Programming Dependencies"
+UDS_RC.routineControlIdentifiers[0x0202] = "Check Memory"
+UDS_RC.routineControlIdentifiers[0x0203] = "Check Programming Preconditions"
+UDS_RC.routineControlIdentifiers[0x0317] = "Reset of Adaption Values"
+UDS_RC.routineControlIdentifiers[0x0366] = "Reset of all Adaptions"
+UDS_RC.routineControlIdentifiers[0x03e7] = "Reset to Factory Settings"
+UDS_RC.routineControlIdentifiers[0x045a] = "Clear user defined DTC information"
+UDS_RC.routineControlIdentifiers[0x0544] = "Verify partial software checksum"
+UDS_RC.routineControlIdentifiers[0x0594] = "Check upload preconditions"
+UDS_RC.routineControlIdentifiers[0xff00] = "Erase Memory"
+UDS_RC.routineControlIdentifiers[0xff01] = "Check Programming Dependencies"
 
 
 UDS_RD.dataFormatIdentifiers[0x0000] = "Uncompressed"

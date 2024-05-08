@@ -1,24 +1,37 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Nils Weiss <nils@we155.de>
-# This program is published under a GPLv2 license
 
 # scapy.contrib.description = Keyword Protocol 2000 (KWP2000) / ISO 14230
 # scapy.contrib.status = loads
 
 import struct
-import time
 
-from scapy.fields import ByteEnumField, StrField, ConditionalField, \
-    BitField, XByteField, X3BytesField, ByteField, \
-    ObservableDict, XShortEnumField, XByteEnumField
+from scapy.fields import (
+    BitField,
+    ByteEnumField,
+    ByteField,
+    ConditionalField,
+    MayEnd,
+    ObservableDict,
+    StrField,
+    X3BytesField,
+    XByteEnumField,
+    XByteField,
+    XShortEnumField,
+)
 from scapy.packet import Packet, bind_layers, NoPayload
 from scapy.config import conf
 from scapy.error import log_loading
 from scapy.utils import PeriodicSenderThread
 from scapy.plist import _PacketIterable
 from scapy.contrib.isotp import ISOTP
-from scapy.compat import Dict, Any
+
+from typing import (
+    Dict,
+    Any,
+)
 
 
 try:
@@ -112,7 +125,7 @@ class KWP(ISOTP):
     def hashret(self):
         # type: () -> bytes
         if self.service == 0x7f:
-            return struct.pack('B', self.requestServiceId)
+            return struct.pack('B', self.requestServiceId & ~0x40)
         else:
             return struct.pack('B', self.service & ~0x40)
 
@@ -388,7 +401,8 @@ class KWP_ROE(Packet):
     fields_desc = [
         ByteEnumField('responseRequired', 1, responseTypes),
         ByteEnumField('eventWindowTime', 0, eventWindowTimes),
-        ByteEnumField('eventType', 0, eventTypes),
+        MayEnd(ByteEnumField('eventType', 0, eventTypes)),
+        # XXX Is this MayEnd correct?
         ByteField('eventParameter', 0),
         ByteEnumField('serviceToRespond', 0, KWP.services),
         ByteField('serviceParameter', 0)
@@ -402,7 +416,8 @@ class KWP_ROEPR(Packet):
     name = 'ResponseOnEventPositiveResponse'
     fields_desc = [
         ByteField("numberOfActivatedEvents", 0),
-        ByteEnumField('eventWindowTime', 0, KWP_ROE.eventWindowTimes),
+        MayEnd(ByteEnumField('eventWindowTime', 0, KWP_ROE.eventWindowTimes)),
+        # XXX Is this MayEnd correct?
         ByteEnumField('eventType', 0, KWP_ROE.eventTypes),
     ]
 
@@ -955,7 +970,8 @@ class KWP_NR(Packet):
     }
     name = 'NegativeResponse'
     fields_desc = [
-        XByteEnumField('requestServiceId', 0, KWP.services),
+        MayEnd(XByteEnumField('requestServiceId', 0, KWP.services)),
+        # XXX Is this MayEnd correct?
         ByteEnumField('negativeResponseCode', 0, negativeResponseCodes)
     ]
 
@@ -974,7 +990,8 @@ bind_layers(KWP, KWP_NR, service=0x7f)
 # ##################################################################
 
 class KWP_TesterPresentSender(PeriodicSenderThread):
-    def __init__(self, sock, pkt=KWP() / KWP_TP(), interval=2):
+    def __init__(self, sock, pkt=KWP() / KWP_TP(responseRequired=0x02),
+                 interval=2):
         # type: (Any, _PacketIterable, float) -> None
         """ Thread that sends TesterPresent packets periodically
 
@@ -989,4 +1006,6 @@ class KWP_TesterPresentSender(PeriodicSenderThread):
         while not self._stopped.is_set():
             for p in self._pkts:
                 self._socket.sr1(p, timeout=0.3, verbose=False)
-                time.sleep(self._interval)
+                self._stopped.wait(timeout=self._interval)
+                if self._stopped.is_set() or self._socket.closed:
+                    break

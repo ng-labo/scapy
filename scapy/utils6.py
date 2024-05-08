@@ -1,15 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
-
 # Copyright (C) 2005  Guillaume Valadon <guedou@hongo.wide.ad.jp>
 #                     Arnaud Ebalard <arnaud.ebalard@eads.net>
 
 """
 Utility functions for IPv6.
 """
-from __future__ import absolute_import
 import socket
 import struct
 import time
@@ -26,7 +24,7 @@ from scapy.volatile import RandMAC, RandBin
 from scapy.error import warning, Scapy_Exception
 from functools import reduce, cmp_to_key
 
-from scapy.compat import (
+from typing import (
     Iterator,
     List,
     Optional,
@@ -87,6 +85,8 @@ def construct_source_candidate_set(
             cset = (x for x in laddr if x[1] == IPV6_ADDR_SITELOCAL)
     elif addr == '::' and plen == 0:
         cset = (x for x in laddr if x[1] == IPV6_ADDR_GLOBAL)
+    elif addr == '::1':
+        cset = (x for x in laddr if x[1] == IPV6_ADDR_LOOPBACK)
     addrs = [x[0] for x in cset]
     # TODO convert the cmd use into a key
     addrs.sort(key=cmp_to_key(cset_sort))  # Sort with global addresses first
@@ -422,7 +422,7 @@ def in6_getLocalUniquePrefix():
     btod = struct.pack("!II", i, j)
     mac = RandMAC()
     # construct modified EUI-64 ID
-    eui64 = inet_pton(socket.AF_INET6, '::' + in6_mactoifaceid(mac))[8:]
+    eui64 = inet_pton(socket.AF_INET6, '::' + in6_mactoifaceid(str(mac)))[8:]
     import hashlib
     globalid = hashlib.sha1(btod + eui64).digest()[:5]
     return inet_ntop(socket.AF_INET6, b'\xfd' + globalid + b'\x00' * 10)

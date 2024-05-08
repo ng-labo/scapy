@@ -1,8 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
+# See https://scapy.net/ for more information
 # Copyright (C) 2008 Arnaud Ebalard <arnaud.ebalard@eads.net>
 #                                   <arno@natisbad.org>
 #   2015, 2016, 2017 Maxence Tury   <maxence.tury@ssi.gouv.fr>
-# This program is published under a GPLv2 license
 
 """
 High-level methods for PKI objects (X.509 certificates, CRLs, asymmetric keys).
@@ -26,15 +27,11 @@ For instance, here is what you could do in order to modify the serial of
 No need for obnoxious openssl tweaking anymore. :)
 """
 
-from __future__ import absolute_import
-from __future__ import print_function
 import base64
 import os
 import time
 
 from scapy.config import conf, crypto_validator
-import scapy.modules.six as six
-from scapy.modules.six.moves import range
 from scapy.error import warning
 from scapy.utils import binrepr
 from scapy.asn1.asn1 import ASN1_BIT_STRING
@@ -47,11 +44,26 @@ from scapy.layers.x509 import (X509_SubjectPublicKeyInfo,
 from scapy.layers.tls.crypto.pkcs1 import pkcs_os2ip, _get_hash, \
     _EncryptAndVerifyRSA, _DecryptAndSignRSA
 from scapy.compat import raw, bytes_encode
+
 if conf.crypto_valid:
+    from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.backends import default_backend
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa, ec
-    from cryptography.hazmat.backends.openssl.ec import InvalidSignature
+
+    # cryptography raised the minimum RSA key length to 1024 in 43.0+
+    # https://github.com/pyca/cryptography/pull/10278
+    # but we need still 512 for EXPORT40 ciphers (yes EXPORT is terrible)
+    # https://datatracker.ietf.org/doc/html/rfc2246#autoid-66
+    # The following detects the change and hacks around it using the backend
+
+    try:
+        rsa.generate_private_key(public_exponent=65537, key_size=512)
+        _RSA_512_SUPPORTED = True
+    except ValueError:
+        # cryptography > 43.0
+        _RSA_512_SUPPORTED = False
+        from cryptography.hazmat.primitives.asymmetric.rsa import rust_openssl
 
 
 # Maximum allowed size in bytes for a certificate file, to avoid
@@ -241,7 +253,7 @@ class _PubKeyFactory(_PKIObjMaker):
         return obj
 
 
-class PubKey(six.with_metaclass(_PubKeyFactory, object)):
+class PubKey(metaclass=_PubKeyFactory):
     """
     Parent class for both PubKeyRSA and PubKeyECDSA.
     Provides a common verifyCert() method.
@@ -266,9 +278,18 @@ class PubKeyRSA(PubKey, _EncryptAndVerifyRSA):
         pubExp = pubExp or 65537
         if not modulus:
             real_modulusLen = modulusLen or 2048
-            private_key = rsa.generate_private_key(public_exponent=pubExp,
-                                                   key_size=real_modulusLen,
-                                                   backend=default_backend())
+            if real_modulusLen < 1024 and not _RSA_512_SUPPORTED:
+                # cryptography > 43.0 compatibility
+                private_key = rust_openssl.rsa.generate_private_key(
+                    public_exponent=pubExp,
+                    key_size=real_modulusLen,
+                )
+            else:
+                private_key = rsa.generate_private_key(
+                    public_exponent=pubExp,
+                    key_size=real_modulusLen,
+                    backend=default_backend(),
+                )
             self.pubkey = private_key.public_key()
         else:
             real_modulusLen = len(binrepr(modulus))
@@ -415,7 +436,7 @@ class _Raw_ASN1_BIT_STRING(ASN1_BIT_STRING):
     __str__ = __bytes__
 
 
-class PrivKey(six.with_metaclass(_PrivKeyFactory, object)):
+class PrivKey(metaclass=_PrivKeyFactory):
     """
     Parent class for both PrivKeyRSA and PrivKeyECDSA.
     Provides common signTBSCert() and resignCert() methods.
@@ -446,7 +467,7 @@ class PrivKey(six.with_metaclass(_PrivKeyFactory, object)):
 
     def resignCert(self, cert):
         """ Rewrite the signature of either a Cert or an X509_Cert. """
-        return self.signTBSCert(cert.tbsCertificate)
+        return self.signTBSCert(cert.tbsCertificate, h=None)
 
     def verifyCert(self, cert):
         """ Verifies either a Cert or an X509_Cert. """
@@ -473,9 +494,18 @@ class PrivKeyRSA(PrivKey, _EncryptAndVerifyRSA, _DecryptAndSignRSA):
             # in order to call RSAPrivateNumbers(...)
             # if one of these is missing, we generate a whole new key
             real_modulusLen = modulusLen or 2048
-            self.key = rsa.generate_private_key(public_exponent=pubExp,
-                                                key_size=real_modulusLen,
-                                                backend=default_backend())
+            if real_modulusLen < 1024 and not _RSA_512_SUPPORTED:
+                # cryptography > 43.0 compatibility
+                self.key = rust_openssl.rsa.generate_private_key(
+                    public_exponent=pubExp,
+                    key_size=real_modulusLen,
+                )
+            else:
+                self.key = rsa.generate_private_key(
+                    public_exponent=pubExp,
+                    key_size=real_modulusLen,
+                    backend=default_backend(),
+                )
             self.pubkey = self.key.public_key()
         else:
             real_modulusLen = len(binrepr(modulus))
@@ -570,7 +600,7 @@ class _CertMaker(_PKIObjMaker):
         return obj
 
 
-class Cert(six.with_metaclass(_CertMaker, object)):
+class Cert(metaclass=_CertMaker):
     """
     Wrapper for the X509_Cert from layers/x509.py.
     Use the 'x509Cert' attribute to access original object.
@@ -599,24 +629,16 @@ class Cert(six.with_metaclass(_CertMaker, object)):
         self.authorityKeyID = None
 
         self.notBefore_str = tbsCert.validity.not_before.pretty_time
-        notBefore = tbsCert.validity.not_before.val
-        if notBefore[-1] == "Z":
-            notBefore = notBefore[:-1]
         try:
-            _format = tbsCert.validity.not_before._format
-            self.notBefore = time.strptime(notBefore, _format)
-        except Exception:
+            self.notBefore = tbsCert.validity.not_before.datetime.timetuple()
+        except ValueError:
             raise Exception(error_msg)
         self.notBefore_str_simple = time.strftime("%x", self.notBefore)
 
         self.notAfter_str = tbsCert.validity.not_after.pretty_time
-        notAfter = tbsCert.validity.not_after.val
-        if notAfter[-1] == "Z":
-            notAfter = notAfter[:-1]
         try:
-            _format = tbsCert.validity.not_after._format
-            self.notAfter = time.strptime(notAfter, _format)
-        except Exception:
+            self.notAfter = tbsCert.validity.not_after.datetime.timetuple()
+        except ValueError:
             raise Exception(error_msg)
         self.notAfter_str_simple = time.strftime("%x", self.notAfter)
 
@@ -767,7 +789,7 @@ class _CRLMaker(_PKIObjMaker):
         return obj
 
 
-class CRL(six.with_metaclass(_CRLMaker, object)):
+class CRL(metaclass=_CRLMaker):
     """
     Wrapper for the X509_CRL from layers/x509.py.
     Use the 'x509CRL' attribute to access original object.

@@ -1,24 +1,14 @@
-# coding: utf8
-
+# SPDX-License-Identifier: GPL-2.0-or-later
 # This file is part of Scapy
-# Scapy is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 2 of the License, or
-# any later version.
-#
-# Scapy is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Scapy. If not, see <http://www.gnu.org/licenses/>.
+# See https://scapy.net/ for more information
+# Copyright (C) 2017 Arthur Gervais
+#                    Ken LE PRADO,
+#                    Sebastien Mainand
+#                    Thomas Aurel
 
 # scapy.contrib.description = ModBus Protocol
 # scapy.contrib.status = loads
 
-# Copyright (C) 2017 Arthur Gervais, Ken LE PRADO, Sébastien Mainand,
-# Thomas Aurel
 
 import struct
 
@@ -694,7 +684,7 @@ class ModbusPDUReservedFunctionCodeRequest(_ModbusPDUNoPayload):
     name = "Reserved Function Code Request"
     fields_desc = [
         ByteEnumField("funcCode", 0x00, _reserved_funccode_request),
-        StrFixedLenField('payload', '', 255), ]
+        StrFixedLenField('mb_payload', '', 255), ]
 
     def mysummary(self):
         return self.sprintf("Modbus Reserved Request %funcCode%")
@@ -704,7 +694,7 @@ class ModbusPDUReservedFunctionCodeResponse(_ModbusPDUNoPayload):
     name = "Reserved Function Code Response"
     fields_desc = [
         ByteEnumField("funcCode", 0x00, _reserved_funccode_response),
-        StrFixedLenField('payload', '', 255), ]
+        StrFixedLenField('mb_payload', '', 255), ]
 
     def mysummary(self):
         return self.sprintf("Modbus Reserved Response %funcCode%")
@@ -714,7 +704,7 @@ class ModbusPDUReservedFunctionCodeError(_ModbusPDUNoPayload):
     name = "Reserved Function Code Error"
     fields_desc = [
         ByteEnumField("funcCode", 0x00, _reserved_funccode_error),
-        StrFixedLenField('payload', '', 255), ]
+        StrFixedLenField('mb_payload', '', 255), ]
 
     def mysummary(self):
         return self.sprintf("Modbus Reserved Error %funcCode%")
@@ -750,7 +740,7 @@ class ModbusPDUUserDefinedFunctionCodeRequest(_ModbusPDUNoPayload):
         ModbusByteEnumField(
             "funcCode", 0x00, _userdefined_funccode_request,
             "Unknown user-defined request function Code"),
-        StrFixedLenField('payload', '', 255), ]
+        StrFixedLenField('mb_payload', '', 255), ]
 
     def mysummary(self):
         return self.sprintf("Modbus User-Defined Request %funcCode%")
@@ -762,7 +752,7 @@ class ModbusPDUUserDefinedFunctionCodeResponse(_ModbusPDUNoPayload):
         ModbusByteEnumField(
             "funcCode", 0x00, _userdefined_funccode_response,
             "Unknown user-defined response function Code"),
-        StrFixedLenField('payload', '', 255), ]
+        StrFixedLenField('mb_payload', '', 255), ]
 
     def mysummary(self):
         return self.sprintf("Modbus User-Defined Response %funcCode%")
@@ -774,7 +764,7 @@ class ModbusPDUUserDefinedFunctionCodeError(_ModbusPDUNoPayload):
         ModbusByteEnumField(
             "funcCode", 0x00, _userdefined_funccode_error,
             "Unknown user-defined error function Code"),
-        StrFixedLenField('payload', '', 255), ]
+        StrFixedLenField('mb_payload', '', 255), ]
 
     def mysummary(self):
         return self.sprintf("Modbus User-Defined Error %funcCode%")

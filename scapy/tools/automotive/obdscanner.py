@@ -1,13 +1,10 @@
-#! /usr/bin/env python
-
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Andreas Korb <andreas.korb@e-mundo.de>
 # Copyright (C) Friedrich Feigel <friedrich.feigel@e-mundo.de>
 # Copyright (C) Nils Weiss <nils@we155.de>
-# This program is published under a GPLv2 license
 
-from __future__ import print_function
 
 import getopt
 import sys
@@ -17,11 +14,10 @@ import traceback
 
 from ast import literal_eval
 
-import scapy.modules.six as six
 from scapy.config import conf
 from scapy.consts import LINUX
 
-if six.PY2 or not LINUX or conf.use_pypy:
+if not LINUX or conf.use_pypy:
     conf.contribs['CANSocket'] = {'use-python-can': True}
 
 from scapy.contrib.isotp import ISOTPSocket                    # noqa: E402
@@ -79,6 +75,32 @@ def usage(is_error):
     Python3 on Linux:
     python3 -m scapy.tools.automotive.obdscanner --channel can0 --source 0x123 --destination 0x456 \n''',  # noqa: E501
           file=sys.stderr if is_error else sys.stdout)
+
+
+def get_can_socket(channel, interface, python_can_args):
+    if PYTHON_CAN:
+        if python_can_args:
+            arg_dict = dict((k, literal_eval(v)) for k, v in
+                            (pair.split('=') for pair in
+                             re.split(', | |,', python_can_args)))
+            return CANSocket(bustype=interface, channel=channel, **arg_dict)
+        else:
+            return CANSocket(bustype=interface, channel=channel)
+    else:
+        return CANSocket(channel=channel)
+
+
+def get_isotp_socket(csock, source, destination):
+    return ISOTPSocket(csock, source, destination, basecls=OBD, padding=True)
+
+
+def run_scan(isock, enumerators, full_scan, verbose, timeout):
+    s = OBD_Scanner(isock, test_cases=enumerators, full_scan=full_scan,
+                    debug=verbose,
+                    timeout=timeout)
+    print("Starting OBD-Scan...")
+    s.scan()
+    s.show_testcases()
 
 
 def main():
@@ -161,29 +183,13 @@ def main():
         sys.exit(1)
 
     csock = None
+    isock = None
     try:
-        if PYTHON_CAN:
-            if python_can_args:
-                arg_dict = dict((k, literal_eval(v)) for k, v in
-                                (pair.split('=') for pair in
-                                 re.split(', | |,', python_can_args)))
-                csock = CANSocket(bustype=interface, channel=channel,
-                                  **arg_dict)
-            else:
-                csock = CANSocket(bustype=interface, channel=channel)
-        else:
-            csock = CANSocket(channel=channel)
+        csock = get_can_socket(channel, interface, python_can_args)
+        isock = get_isotp_socket(csock, source, destination)
 
-        with ISOTPSocket(csock, source, destination,
-                         basecls=OBD, padding=True) as isock:
-            signal.signal(signal.SIGINT, signal_handler)
-
-            s = OBD_Scanner(isock, test_cases=enumerators,
-                            full_scan=full_scan, verbose=verbose,
-                            timeout=timeout)
-            print("Starting OBD-Scan...")
-            s.scan()
-            s.show_testcases()
+        signal.signal(signal.SIGINT, signal_handler)
+        run_scan(isock, enumerators, full_scan, verbose, timeout)
 
     except Exception as e:
         usage(True)
@@ -195,7 +201,9 @@ def main():
         sys.exit(1)
 
     finally:
-        if csock is not None:
+        if isock:
+            isock.close()
+        if csock:
             csock.close()
 
 

@@ -21,8 +21,8 @@ then
   do
     case $arg
     in
-      -2) PYTHON=python2;;
       -3) PYTHON=python3;;
+      -W) PYTHONWARNINGS="-W error";;
        *) ARGS="$ARGS $arg";;
     esac
   done
@@ -54,10 +54,12 @@ then
   fi
 
   # Run tox
-  export UT_FLAGS="-K tcpdump -K manufdb -K wireshark -K ci_only -K vcan_socket -K automotive_comm"
+  export UT_FLAGS="-K tcpdump -K wireshark -K tshark -K ci_only -K vcan_socket -K automotive_comm -K imports -K scanner"
   export SIMPLE_TESTS="true"
+  export PYTHON
+  export DISABLE_COVERAGE=" "
   PYVER=$($PYTHON -c "import sys; print('.'.join(sys.version.split('.')[:2]))")
-  ${DIR}/.config/ci/test.sh $PYVER non_root
+  bash ${DIR}/.config/ci/test.sh $PYVER non_root
   exit $?
 fi
-PYTHONPATH=$DIR exec "$PYTHON" ${DIR}/scapy/tools/UTscapy.py $ARGS
+PYTHONPATH=$DIR exec "$PYTHON" $PYTHONWARNINGS ${DIR}/scapy/tools/UTscapy.py $ARGS

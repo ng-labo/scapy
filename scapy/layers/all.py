@@ -1,23 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
 
 """
 All layers. Configurable with conf.load_layers.
 """
 
-from __future__ import absolute_import
+
+import builtins
+import logging
 
 # We import conf from arch to make sure arch specific layers are populated
 from scapy.arch import conf
 from scapy.error import log_loading
 from scapy.main import load_layer
 
-import logging
-import scapy.modules.six as six
-
-ignored = list(six.moves.builtins.__dict__) + ["sys"]
+ignored = list(builtins.__dict__) + ["sys"]
 log = logging.getLogger("scapy.loading")
 
 __all__ = []

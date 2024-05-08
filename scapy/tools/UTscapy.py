@@ -1,14 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
 
 """
 Unit testing infrastructure for Scapy
 """
 
-from __future__ import print_function
-
+import builtins
 import bz2
 import copy
 import code
@@ -21,17 +20,17 @@ import logging
 import os
 import os.path
 import sys
+import threading
 import time
 import traceback
 import warnings
 import zlib
 
 from scapy.consts import WINDOWS
-import scapy.modules.six as six
-from scapy.modules.six.moves import range
 from scapy.config import conf
-from scapy.compat import base64_bytes, bytes_hex, plain_str
+from scapy.compat import base64_bytes
 from scapy.themes import DefaultTheme, BlackAndWhite
+from scapy.utils import tex_escape
 
 
 # Check UTF-8 support #
@@ -41,8 +40,6 @@ def _utf8_support():
     Check UTF-8 support for the output
     """
     try:
-        if six.PY2:
-            return False
         if WINDOWS:
             return (sys.stdout.encoding == "utf-8")
         return True
@@ -68,20 +65,17 @@ class Bunch:
 
 def retry_test(func):
     """Retries the passed function 3 times before failing"""
-    success = False
-    for _ in six.moves.range(3):
+    v = None
+    tb = None
+    for _ in range(3):
         try:
-            result = func()
+            return func()
         except Exception:
             t, v, tb = sys.exc_info()
             time.sleep(1)
-        else:
-            success = True
-            break
-    if not success:
-        six.reraise(t, v, tb)
-    assert success
-    return result
+
+    if v and tb:
+        raise v.with_traceback(tb)
 
 
 def scapy_path(fname):
@@ -91,6 +85,20 @@ def scapy_path(fname):
     return os.path.abspath(os.path.join(
         os.path.dirname(__file__), '../../', fname
     ))
+
+
+class no_debug_dissector:
+    """Context object used to disable conf.debug_dissector"""
+    def __init__(self, reverse=False):
+        self.new_value = reverse
+
+    def __enter__(self):
+        self.old_dbg = conf.debug_dissector
+        conf.debug_dissector = self.new_value
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        conf.debug_dissector = self.old_dbg
+
 
 #    Import tool    #
 
@@ -166,12 +174,12 @@ I4LDm5WP7s2NaRkhhV7A\nFVSD5zA8V/DJzfTk0QHmCT2wRgwPKjP60EqqlDUaST
 /i7kinChIXSAmRgA==\n""")
 
     def get_local_dict(cls):
-        return {x: y.name for (x, y) in six.iteritems(cls.__dict__)
+        return {x: y.name for (x, y) in cls.__dict__.items()
                 if isinstance(y, File)}
     get_local_dict = classmethod(get_local_dict)
 
     def get_URL_dict(cls):
-        return {x: y.URL for (x, y) in six.iteritems(cls.__dict__)
+        return {x: y.URL for (x, y) in cls.__dict__.items()
                 if isinstance(y, File)}
     get_URL_dict = classmethod(get_URL_dict)
 
@@ -200,7 +208,7 @@ class TestClass:
         return getattr(self, item)
 
     def add_keywords(self, kws):
-        if isinstance(kws, six.string_types):
+        if isinstance(kws, str):
             kws = [kws.lower()]
         for kwd in kws:
             kwd = kwd.lower()
@@ -287,11 +295,6 @@ class UnitTest(TestClass):
         self.expand = 1
 
     def prepare(self, theme):
-        if six.PY2:
-            self.test = self.test.decode("utf8", "ignore")
-            self.output = self.output.decode("utf8", "ignore")
-            self.comments = self.comments.decode("utf8", "ignore")
-            self.result = self.result.decode("utf8", "ignore")
         if self.result == "passed":
             self.fresult = theme.success(self.result)
         else:
@@ -450,18 +453,12 @@ def docs_campaign(test_campaign):
 
 
 #    COMPUTE CAMPAIGN DIGESTS    #
-if six.PY2:
-    def crc32(x):
-        return "%08X" % (0xffffffff & zlib.crc32(x))
+def crc32(x):
+    return "%08X" % (0xffffffff & zlib.crc32(bytearray(x, "utf8")))
 
-    def sha1(x):
-        return hashlib.sha1(x).hexdigest().upper()
-else:
-    def crc32(x):
-        return "%08X" % (0xffffffff & zlib.crc32(bytearray(x, "utf8")))
 
-    def sha1(x):
-        return hashlib.sha1(x.encode("utf8")).hexdigest().upper()
+def sha1(x):
+    return hashlib.sha1(x.encode("utf8")).hexdigest().upper()
 
 
 def compute_campaign_digests(test_campaign):
@@ -517,11 +514,23 @@ def remove_empty_testsets(test_campaign):
 
 # RUN TEST #
 
+def _run_test_timeout(test, get_interactive_session, verb=3, my_globals=None):
+    """Run a test with timeout"""
+    from scapy.autorun import StopAutorunTimeout
+    try:
+        return get_interactive_session(test,
+                                       timeout=5 * 60,  # 5 min
+                                       verb=verb,
+                                       my_globals=my_globals)
+    except StopAutorunTimeout:
+        return "-- Test timed out ! --", False
+
+
 def run_test(test, get_interactive_session, theme, verb=3,
              my_globals=None):
     """An internal UTScapy function to run a single test"""
     start_time = time.time()
-    test.output, res = get_interactive_session(test.test.strip(), verb=verb, my_globals=my_globals)
+    test.output, res = _run_test_timeout(test.test.strip(), get_interactive_session, verb=verb, my_globals=my_globals)
     test.result = "failed"
     try:
         if res is None or res:
@@ -539,7 +548,7 @@ def run_test(test, get_interactive_session, theme, verb=3,
             # Add optional debugging data to log
             if debug.crashed_on:
                 cls, val = debug.crashed_on
-                test.output += "\n\nPACKET DISSECTION FAILED ON:\n %s(hex_bytes('%s'))" % (cls.__name__, plain_str(bytes_hex(val)))
+                test.output += "\n\nPACKET DISSECTION FAILED ON:\n %s(bytes.fromhex('%s'))" % (cls.__name__, val.hex())
                 debug.crashed_on = None
         test.prepare(theme)
         if verb > 2:
@@ -557,6 +566,7 @@ def import_UTscapy_tools(ses):
     ses["Bunch"] = Bunch
     ses["retry_test"] = retry_test
     ses["scapy_path"] = scapy_path
+    ses["no_debug_dissector"] = no_debug_dissector
     if WINDOWS:
         from scapy.arch.windows import _route_add_loopback
         _route_add_loopback()
@@ -644,6 +654,14 @@ def html_info_line(test_campaign):
         return """Run %s by <a href="http://www.secdev.org/projects/UTscapy/">UTscapy</a><br>""" % time.ctime()  # noqa: E501
     else:
         return """Run %s from [%s] by <a href="http://www.secdev.org/projects/UTscapy/">UTscapy</a><br>""" % (time.ctime(), filename)  # noqa: E501
+
+
+def latex_info_line(test_campaign):
+    filename = test_campaign.filename
+    if filename is None:
+        return """by UTscapy""", """%s""" % time.ctime()
+    else:
+        return """from %s by UTscapy""" % tex_escape(filename), """%s""" % time.ctime()
 
 
 #    CAMPAIGN TO something    #
@@ -775,19 +793,9 @@ def pack_html_campaigns(runned_campaigns, data, local=False, title=None):
 
 
 def campaign_to_LATEX(test_campaign):
-    output = r"""\documentclass{report}
-\usepackage{alltt}
-\usepackage{xcolor}
-\usepackage{a4wide}
-\usepackage{hyperref}
-
-\title{%(title)s}
-\date{%%s}
-
-\begin{document}
-\maketitle
-\tableofcontents
-
+    output = r"""
+\chapter{%(title)s}
+Run %%s on \date{%%s}
 \begin{description}
 \item[Passed:] %(passed)i
 \item[Failed:] %(failed)i
@@ -796,15 +804,16 @@ def campaign_to_LATEX(test_campaign):
 %(headcomments)s
 
 """ % test_campaign
-    output %= info_line(test_campaign)
+    output %= latex_info_line(test_campaign)
 
     for testset in test_campaign:
-        output += "\\chapter{%(name)s}\n\n%(comments)s\n\n" % testset
+        output += "\\section{%(name)s}\n\n%(comments)s\n\n" % testset
         for t in testset:
+            t.comments = tex_escape(t.comments)
             if t.expand:
-                output += r"""\section{%(name)s}
+                output += r"""\subsection{%(name)s}
 
-[%(num)03i] [%(result)s]
+Test result: \textbf{%(result)s}\newline
 
 %(comments)s
 \begin{alltt}
@@ -813,7 +822,30 @@ def campaign_to_LATEX(test_campaign):
 
 """ % t
 
-    output += "\\end{document}\n"
+    return output
+
+
+def pack_latex_campaigns(runned_campaigns, data, local=False, title=None):
+    output = r"""
+\documentclass{report}
+\usepackage{alltt}
+\usepackage{xcolor}
+\usepackage{a4wide}
+\usepackage{hyperref}
+
+\title{%(title)s}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+%(data)s
+\end{document}\n
+"""
+
+    out_dict = {'data': data, 'title': title if title else "UTScapy tests"}
+
+    output %= out_dict
     return output
 
 
@@ -939,6 +971,9 @@ def main():
     logger = logging.getLogger("scapy")
     logger.addHandler(logging.StreamHandler())
 
+    # Treat SyntaxWarning as errors
+    warnings.filterwarnings("error", category=SyntaxWarning)
+
     import scapy
     print(dash + " UTScapy - Scapy %s - %s" % (
         scapy.__version__, sys.version.split(" ")[0]
@@ -1061,15 +1096,9 @@ def main():
 
     # Disable tests if needed
 
-    # Discard Python3 tests when using Python2
-    if six.PY2:
-        KW_KO.append("python3_only")
-        if VERB > 2:
-            print(" " + arrow + " Python 2 mode")
     try:
         if NON_ROOT or os.getuid() != 0:  # Non root
             # Discard root tests
-            KW_KO.append("netaccess")
             KW_KO.append("needs_root")
             if VERB > 2:
                 print(" " + arrow + " Non-root mode")
@@ -1082,10 +1111,6 @@ def main():
             print(" " + arrow + " libpcap mode")
 
     KW_KO.append("disabled")
-
-    # Process extras
-    if six.PY3:
-        KW_KO.append("FIXME_py3")
 
     if ANNOTATIONS_MODE:
         try:
@@ -1107,7 +1132,7 @@ def main():
     for m in MODULES:
         try:
             mod = import_module(m)
-            six.moves.builtins.__dict__.update(mod.__dict__)
+            builtins.__dict__.update(mod.__dict__)
         except ImportError as e:
             raise getopt.GetoptError("cannot import [%s]: %s" % (m, e))
 
@@ -1130,7 +1155,7 @@ def main():
     UNIQUE = len(TESTFILES) == 1
 
     # Resolve tags and asterix
-    for prex in six.iterkeys(copy.copy(PREEXEC_DICT)):
+    for prex in copy.copy(PREEXEC_DICT).keys():
         if "*" in prex:
             pycode = PREEXEC_DICT[prex]
             del PREEXEC_DICT[prex]
@@ -1181,6 +1206,8 @@ def main():
     # Concenate outputs
     if FORMAT == Format.HTML:
         glob_output = pack_html_campaigns(runned_campaigns, glob_output, LOCAL, glob_title)
+    if FORMAT == Format.LATEX:
+        glob_output = pack_latex_campaigns(runned_campaigns, glob_output, LOCAL, glob_title)
 
     # Write the final output
     # Note: on Python 2, we force-encode to ignore ascii errors
@@ -1190,7 +1217,7 @@ def main():
     else:
         with open(OUTPUTFILE, "wb") as f:
             f.write(glob_output.encode("utf8", "ignore")
-                    if 'b' in f.mode or six.PY2 else glob_output)
+                    if 'b' in f.mode else glob_output)
 
     # Print end message
     if VERB > 2:
@@ -1201,7 +1228,6 @@ def main():
 
     # Check active threads
     if VERB > 2:
-        import threading
         if threading.active_count() > 1:
             print("\nWARNING: UNFINISHED THREADS")
             print(threading.enumerate())
@@ -1210,6 +1236,8 @@ def main():
         if processes:
             print("\nWARNING: UNFINISHED PROCESSES")
             print(processes)
+
+    sys.stdout.flush()
 
     # Return state
     return glob_result

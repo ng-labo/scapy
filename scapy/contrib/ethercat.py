@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# This file is part of Scapy
+# See https://scapy.net/ for more information
+
 # scapy.contrib.description = EtherCat
 # scapy.contrib.status = loads
 
@@ -6,17 +10,6 @@
     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     :author:    Thomas Tannhaeuser, hecke@naberius.de
-    :license:   GPLv2
-
-        This module is free software; you can redistribute it and/or
-        modify it under the terms of the GNU General Public License
-        as published by the Free Software Foundation; either version 2
-        of the License, or (at your option) any later version.
-
-        This module is distributed in the hope that it will be useful,
-        but WITHOUT ANY WARRANTY; without even the implied warranty of
-        MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-        GNU General Public License for more details.
 
     :description:
 
@@ -51,7 +44,6 @@ from scapy.error import log_runtime, Scapy_Exception
 from scapy.fields import BitField, ByteField, LEShortField, FieldListField, \
     LEIntField, FieldLenField, _EnumField, EnumField
 from scapy.layers.l2 import Ether, Dot1Q
-import scapy.modules.six as six
 from scapy.packet import bind_layers, Packet, Padding
 
 '''
@@ -259,7 +251,7 @@ class LEBitFieldLenField(LEBitField):
         self.adjust = adjust
 
     def i2m(self, pkt, x):
-        return (FieldLenField.i2m.__func__ if six.PY2 else FieldLenField.i2m)(self, pkt, x)  # noqa: E501
+        return FieldLenField.i2m(self, pkt, x)
 
 
 class LEBitEnumField(LEBitField, _EnumField):

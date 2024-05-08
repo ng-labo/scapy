@@ -1,27 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# This file is part of Scapy
+# See https://scapy.net/ for more information
+# Copyright (C) 2006 Nicolas Bareil  <nicolas.bareil AT eads DOT net>
+#                    Arnaud Ebalard  <arnaud.ebalard AT eads DOT net>
+#                    EADS/CRC security team
+
 # scapy.contrib.description = Cisco Discovery Protocol (CDP)
 # scapy.contrib.status = loads
 
-#############################################################################
-#                                                                           #
-#  cdp.py --- Cisco Discovery Protocol (CDP) extension for Scapy            #
-#                                                                           #
-#  Copyright (C) 2006    Nicolas Bareil  <nicolas.bareil AT eads DOT net>   #
-#                        Arnaud Ebalard  <arnaud.ebalard AT eads DOT net>   #
-#                        EADS/CRC security team                             #
-#                                                                           #
-#  This file is part of Scapy                                               #
-#  Scapy is free software: you can redistribute it and/or modify it         #
-#  under the terms of the GNU General Public License version 2 as           #
-#  published by the Free Software Foundation; version 2.                    #
-#                                                                           #
-#  This program is distributed in the hope that it will be useful, but      #
-#  WITHOUT ANY WARRANTY; without even the implied warranty of               #
-#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU        #
-#  General Public License for more details.                                 #
-#                                                                           #
-#############################################################################
+"""
+Cisco Discovery Protocol (CDP) extension for Scapy
+"""
 
-from __future__ import absolute_import
 import struct
 
 from scapy.packet import Packet, bind_layers
@@ -29,7 +19,9 @@ from scapy.fields import (
     ByteEnumField,
     ByteField,
     FieldLenField,
+    FieldListField,
     FlagsField,
+    IntField,
     IP6Field,
     IPField,
     OUIField,
@@ -43,7 +35,6 @@ from scapy.fields import (
 from scapy.layers.inet import checksum
 from scapy.layers.l2 import SNAP
 from scapy.compat import orb, chb
-from scapy.modules.six.moves import range
 from scapy.config import conf
 
 
@@ -74,8 +65,8 @@ _cdp_tlv_cls = {0x0001: "CDPMsgDeviceID",
                 #                 0x0015: "CDPMsgSystemOID",
                 0x0016: "CDPMsgMgmtAddr",
                 #                 0x0017: "CDPMsgLocation",
-                0x0019: "CDPMsgUnknown19",
-                #                 0x001a: "CDPPowerAvailable"
+                0x0019: "CDPMsgPowerRequest",
+                0x001a: "CDPMsgPowerAvailable"
                 }
 
 _cdp_tlv_types = {0x0001: "Device ID",
@@ -102,7 +93,7 @@ _cdp_tlv_types = {0x0001: "Device ID",
                   0x0016: "Management Address",
                   0x0017: "Location",
                   0x0018: "CDP Unknown command (send us a pcap file)",
-                  0x0019: "CDP Unknown command (send us a pcap file)",
+                  0x0019: "Power Request",
                   0x001a: "Power Available"}
 
 
@@ -303,7 +294,7 @@ class CDPMsgVoIPVLANReply(CDPMsgGeneric):
     name = "VoIP VLAN Reply"
     fields_desc = [XShortEnumField("type", 0x000e, _cdp_tlv_types),
                    ShortField("len", 7),
-                   ByteField("status?", 1),
+                   ByteField("status", 1),
                    ShortField("vlan", 1)]
 
 
@@ -362,9 +353,28 @@ class CDPMsgMgmtAddr(CDPMsgAddr):
     type = 0x0016
 
 
-class CDPMsgUnknown19(CDPMsgGeneric):
-    name = "Unknown CDP Message"
-    type = 0x0019
+class CDPMsgPowerRequest(CDPMsgGeneric):
+    name = "Power Request"
+    fields_desc = [XShortEnumField("type", 0x0019, _cdp_tlv_types),
+                   FieldLenField("len", None, "power_requested_list", fmt="!H",
+                                 adjust=lambda pkt, x: x + 8),
+                   ShortField("req_id", 0),
+                   ShortField("mgmt_id", 0),
+                   FieldListField("power_requested_list", [],
+                                  IntField("power_requested", 0),
+                                  count_from=lambda pkt: (pkt.len - 8) // 4)]
+
+
+class CDPMsgPowerAvailable(CDPMsgGeneric):
+    name = "Power Available"
+    fields_desc = [XShortEnumField("type", 0x001a, _cdp_tlv_types),
+                   FieldLenField("len", None, "power_available_list", fmt="!H",
+                                 adjust=lambda pkt, x: x + 8),
+                   ShortField("req_id", 0),
+                   ShortField("mgmt_id", 0),
+                   FieldListField("power_available_list", [],
+                                  IntField("power_available", 0),
+                                  count_from=lambda pkt: (pkt.len - 8) // 4)]
 
 
 class CDPMsg(CDPMsgGeneric):

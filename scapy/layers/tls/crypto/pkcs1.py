@@ -1,7 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
+# See https://scapy.net/ for more information
 # Copyright (C) 2008 Arnaud Ebalard <arno@natisbad.org>
 #   2015, 2016, 2017 Maxence Tury <maxence.tury@ssi.gouv.fr>
-# This program is published under a GPLv2 license
 
 """
 PKCS #1 methods as defined in RFC 3447.
@@ -11,14 +12,11 @@ used by the cryptography library may not implement the md5-sha1 hash, as with
 Ubuntu or OSX. This is why we reluctantly keep some legacy crypto here.
 """
 
-from __future__ import absolute_import
 from scapy.compat import bytes_encode, hex_bytes, bytes_hex
-import scapy.modules.six as six
 
 from scapy.config import conf, crypto_validator
 from scapy.error import warning
 if conf.crypto_valid:
-    from cryptography import utils
     from cryptography.exceptions import InvalidSignature, UnsupportedAlgorithm
     from cryptography.hazmat.backends import default_backend
     from cryptography.hazmat.primitives import hashes
@@ -95,8 +93,7 @@ _get_hash = None
 if conf.crypto_valid:
 
     # first, we add the "md5-sha1" hash from openssl to python-cryptography
-    @utils.register_interface(HashAlgorithm)
-    class MD5_SHA1(object):
+    class MD5_SHA1(HashAlgorithm):
         name = "md5-sha1"
         digest_size = 36
         block_size = 64
@@ -171,9 +168,7 @@ class _EncryptAndVerifyRSA(object):
             return False
         s = pkcs_os2ip(S)
         n = self._modulus
-        if isinstance(s, int) and six.PY2:
-            s = long(s)  # noqa: F821
-        if (six.PY2 and not isinstance(s, long)) or s > n - 1:  # noqa: F821
+        if s > n - 1:
             warning("Key._rsaep() expects a long between 0 and n-1")
             return None
         m = pow(s, self._pubExp, n)
@@ -216,9 +211,7 @@ class _DecryptAndSignRSA(object):
             return None
         m = pkcs_os2ip(EM)
         n = self._modulus
-        if isinstance(m, int) and six.PY2:
-            m = long(m)  # noqa: F821
-        if (six.PY2 and not isinstance(m, long)) or m > n - 1:  # noqa: F821
+        if m > n - 1:
             warning("Key._rsaep() expects a long between 0 and n-1")
             return None
         privExp = self.key.private_numbers().d

@@ -1,7 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Haggai Eran <haggai.eran@gmail.com>
-# This program is published under a GPLv2 license
 
 # scapy.contrib.description = RoCE v2
 # scapy.contrib.status = loads
@@ -14,12 +14,16 @@ from scapy.packet import Packet, bind_layers, Raw
 from scapy.fields import ByteEnumField, ByteField, XByteField, \
     ShortField, XShortField, XLongField, BitField, XBitField, FCSField
 from scapy.layers.inet import IP, UDP
+from scapy.layers.inet6 import IPv6
 from scapy.layers.l2 import Ether
 from scapy.compat import raw
 from scapy.error import warning
 from zlib import crc32
 import struct
-from scapy.compat import Tuple
+
+from typing import (
+    Tuple
+)
 
 _transports = {
     'RC': 0x00,
@@ -176,8 +180,25 @@ class BTH(Packet):
             pshdr[UDP].payload = Raw(bth + payload + icrc_placeholder)
             icrc = crc32(raw(pshdr)[:-4]) & 0xffffffff
             return self.pack_icrc(icrc)
+        elif isinstance(ip, IPv6):
+            # pseudo-LRH / IPv6 / UDP / BTH / payload
+            pshdr = Raw(b'\xff' * 8) / ip.copy()
+            pshdr.hlim = 0xff
+            pshdr.fl = 0xfffff
+            pshdr.tc = 0xff
+            pshdr[UDP].chksum = 0xffff
+            pshdr[BTH].fecn = 1
+            pshdr[BTH].becn = 1
+            pshdr[BTH].resv6 = 0xff
+            bth = pshdr[BTH].self_build()
+            payload = raw(pshdr[BTH].payload)
+            # add ICRC placeholder just to get the right IPv6.plen and
+            # UDP.length
+            icrc_placeholder = b'\xff\xff\xff\xff'
+            pshdr[UDP].payload = Raw(bth + payload + icrc_placeholder)
+            icrc = crc32(raw(pshdr)[:-4]) & 0xffffffff
+            return self.pack_icrc(icrc)
         else:
-            # TODO support IPv6
             warning("The underlayer protocol %s is not supported.",
                     ip and ip.name)
             return self.pack_icrc(0)

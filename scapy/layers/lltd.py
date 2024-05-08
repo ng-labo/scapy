@@ -1,7 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
 
 """LLTD Protocol
 
@@ -9,7 +9,6 @@ https://msdn.microsoft.com/en-us/library/cc233983.aspx
 
 """
 
-from __future__ import absolute_import
 from array import array
 
 from scapy.fields import BitField, FlagsField, ByteField, ByteEnumField, \
@@ -22,7 +21,6 @@ from scapy.layers.l2 import Ether
 from scapy.layers.inet import IPField
 from scapy.layers.inet6 import IP6Field
 from scapy.data import ETHER_ANY
-import scapy.modules.six as six
 from scapy.compat import orb, chb
 
 
@@ -299,7 +297,7 @@ class LLTDAttribute(Packet):
             cmd = orb(_pkt[0])
         elif "type" in kargs:
             cmd = kargs["type"]
-            if isinstance(cmd, six.string_types):
+            if isinstance(cmd, str):
                 cmd = cls.fields_desc[0].s2i[cmd]
         else:
             return cls
@@ -717,7 +715,7 @@ class LLTDAttributeMachineName(LLTDAttribute):
     ]
 
     def mysummary(self):
-        return (self.sprintf("Hostname: %r" % self.hostname),
+        return (f"Hostname: {self.hostname!r}",
                 [LLTD, LLTDAttributeHostID])
 
 
@@ -842,4 +840,4 @@ class LargeTlvBuilder(object):
 
         """
         return {key: "".join(chr(byte) for byte in data)
-                for key, data in six.iteritems(self.data)}
+                for key, data in self.data.items()}

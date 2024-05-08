@@ -1,29 +1,29 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
 
 """
 Direct Access dictionary.
 """
 
-from __future__ import absolute_import
-from __future__ import print_function
 from scapy.error import Scapy_Exception
-import scapy.modules.six as six
 from scapy.compat import plain_str
 
-from scapy.compat import (
+# Typing
+from typing import (
     Any,
     Dict,
     Generic,
     Iterator,
     List,
+    Tuple,
+    Type,
     TypeVar,
     Union,
-    cast,
-    _Generic_metaclass,
 )
+from scapy.compat import Self
+
 
 ###############################
 #  Direct Access dictionary   #
@@ -55,7 +55,6 @@ _K = TypeVar('_K')  # Key type
 _V = TypeVar('_V')  # Value type
 
 
-@six.add_metaclass(_Generic_metaclass)
 class DADict(Generic[_K, _V]):
     """
     Direct Access Dictionary
@@ -72,11 +71,13 @@ class DADict(Generic[_K, _V]):
 
         ETHER_TYPES.IPv4 -> 2048
     """
+    __slots__ = ["_name", "d"]
+
     def __init__(self, _name="DADict", **kargs):
         # type: (str, **Any) -> None
         self._name = _name
         self.d = {}  # type: Dict[_K, _V]
-        self.update(kargs)
+        self.update(kargs)  # type: ignore
 
     def ident(self, v):
         # type: (_V) -> str
@@ -88,13 +89,13 @@ class DADict(Generic[_K, _V]):
         return "unknown"
 
     def update(self, *args, **kwargs):
-        # type: (*Dict[str, _V], **Dict[str, _V]) -> None
-        for k, v in six.iteritems(dict(*args, **kwargs)):
-            self[k] = v
+        # type: (*Dict[_K, _V], **Dict[_K, _V]) -> None
+        for k, v in dict(*args, **kwargs).items():
+            self[k] = v  # type: ignore
 
     def iterkeys(self):
         # type: () -> Iterator[_K]
-        for x in six.iterkeys(self.d):
+        for x in self.d:
             if not isinstance(x, str) or x[0] != "_":
                 yield x
 
@@ -108,7 +109,7 @@ class DADict(Generic[_K, _V]):
 
     def itervalues(self):
         # type: () -> Iterator[_V]
-        return six.itervalues(self.d)  # type: ignore
+        return self.d.values()  # type: ignore
 
     def values(self):
         # type: () -> List[_V]
@@ -146,11 +147,20 @@ class DADict(Generic[_K, _V]):
         try:
             return object.__getattribute__(self, attr)  # type: ignore
         except AttributeError:
-            for k, v in six.iteritems(self.d):
+            for k, v in self.d.items():
                 if self.ident(v) == attr:
-                    return cast(_K, k)
+                    return k
         raise AttributeError
 
     def __dir__(self):
         # type: () -> List[str]
         return [self.ident(x) for x in self.itervalues()]
+
+    def __reduce__(self):
+        # type: () -> Tuple[Type[Self], Tuple[str], Tuple[Dict[_K, _V]]]
+        return (self.__class__, (self._name,), (self.d,))
+
+    def __setstate__(self, state):
+        # type: (Tuple[Dict[_K, _V]]) -> Self
+        self.d.update(state[0])
+        return self

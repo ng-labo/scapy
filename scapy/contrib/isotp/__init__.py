@@ -1,31 +1,38 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Nils Weiss <nils@we155.de>
-# This program is published under a GPLv2 license
 
 # scapy.contrib.description = ISO-TP (ISO 15765-2)
 # scapy.contrib.status = loads
 
+import logging
+
 from scapy.consts import LINUX
-import scapy.modules.six as six
 from scapy.config import conf
 from scapy.error import log_loading
 
 from scapy.contrib.isotp.isotp_packet import ISOTP, ISOTPHeader, \
-    ISOTPHeaderEA, ISOTP_SF, ISOTP_FF, ISOTP_CF, ISOTP_FC
+    ISOTPHeaderEA, ISOTP_SF, ISOTP_FF, ISOTP_CF, ISOTP_FC, \
+    ISOTP_FF_FD, ISOTP_SF_FD, ISOTPHeaderEA_FD, ISOTPHeader_FD
 from scapy.contrib.isotp.isotp_utils import ISOTPSession, \
     ISOTPMessageBuilder
 from scapy.contrib.isotp.isotp_soft_socket import ISOTPSoftSocket
 from scapy.contrib.isotp.isotp_scanner import isotp_scan
 
 __all__ = ["ISOTP", "ISOTPHeader", "ISOTPHeaderEA", "ISOTP_SF", "ISOTP_FF",
-           "ISOTP_CF", "ISOTP_FC", "ISOTPSoftSocket", "ISOTPSession",
+           "ISOTP_CF", "ISOTP_FC", "ISOTP_FF_FD", "ISOTP_SF_FD",
+           "ISOTPSoftSocket", "ISOTPSession", "ISOTPHeader_FD",
+           "ISOTPHeaderEA_FD",
            "ISOTPSocket", "ISOTPMessageBuilder", "isotp_scan",
-           "USE_CAN_ISOTP_KERNEL_MODULE"]
+           "USE_CAN_ISOTP_KERNEL_MODULE", "log_isotp"]
 
 USE_CAN_ISOTP_KERNEL_MODULE = False
 
-if six.PY3 and LINUX:
+log_isotp = logging.getLogger("scapy.contrib.isotp")
+log_isotp.setLevel(logging.INFO)
+
+if LINUX:
     try:
         if conf.contribs['ISOTP']['use-can-isotp-kernel-module']:
             USE_CAN_ISOTP_KERNEL_MODULE = True

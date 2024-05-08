@@ -1,7 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
 
 """
 PPP (Point to Point Protocol)
@@ -38,7 +38,6 @@ from scapy.fields import (
     XShortField,
     XStrLenField,
 )
-from scapy.modules import six
 
 
 class PPPoE(Packet):
@@ -78,10 +77,7 @@ class PPPoED(PPPoE):
                    ShortField("len", None)]
 
     def extract_padding(self, s):
-        if len(s) < 5:
-            return s, None
-        length = struct.unpack("!H", s[4:6])[0]
-        return s[:length], s[length:]
+        return s[:self.len], s[self.len:]
 
     def mysummary(self):
         return self.sprintf("%code%")
@@ -296,6 +292,14 @@ class _PPPProtoField(EnumField):
 
     See RFC 1661 section 2
     <https://tools.ietf.org/html/rfc1661#section-2>
+
+    The generated proto field is two bytes when not specified, or when specified
+    as an integer or a string:
+      PPP()
+      PPP(proto=0x21)
+      PPP(proto="Internet Protocol version 4")
+    To explicitly forge a one byte proto field, use the bytes representation:
+      PPP(proto=b'\x21')
     """
     def getfield(self, pkt, s):
         if ord(s[:1]) & 0x01:
@@ -308,12 +312,18 @@ class _PPPProtoField(EnumField):
         return super(_PPPProtoField, self).getfield(pkt, s)
 
     def addfield(self, pkt, s, val):
-        if val < 0x100:
-            self.fmt = "!B"
-            self.sz = 1
+        if isinstance(val, bytes):
+            if len(val) == 1:
+                fmt, sz = "!B", 1
+            elif len(val) == 2:
+                fmt, sz = "!H", 2
+            else:
+                raise TypeError('Invalid length for PPP proto')
+            val = struct.Struct(fmt).unpack(val)[0]
         else:
-            self.fmt = "!H"
-            self.sz = 2
+            fmt, sz = "!H", 2
+        self.fmt = fmt
+        self.sz = sz
         self.struct = struct.Struct(self.fmt)
         return super(_PPPProtoField, self).addfield(pkt, s, val)
 
@@ -756,7 +766,7 @@ class PPP_PAP(Packet):
             code = orb(_pkt[0])
         elif "code" in kargs:
             code = kargs["code"]
-            if isinstance(code, six.string_types):
+            if isinstance(code, str):
                 code = cls.fields_desc[0].s2i[code]
 
         if code == 1:
@@ -837,7 +847,7 @@ class PPP_CHAP(Packet):
             code = orb(_pkt[0])
         elif "code" in kargs:
             code = kargs["code"]
-            if isinstance(code, six.string_types):
+            if isinstance(code, str):
                 code = cls.fields_desc[0].s2i[code]
 
         if code in (1, 2):

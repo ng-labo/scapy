@@ -1,7 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
 
 
 """A minimal implementation of the CANopen protocol, based on
@@ -12,17 +12,12 @@ Wireshark dissectors. See https://wiki.wireshark.org/CANopen
 import os
 import gzip
 import struct
-import binascii
 
-from scapy.compat import Tuple, Optional, Type, List, Union, Callable, IO, \
-    Any, cast
-
-import scapy.modules.six as six
 from scapy.config import conf
-from scapy.compat import orb
+from scapy.compat import chb, hex_bytes
 from scapy.data import DLT_CAN_SOCKETCAN
 from scapy.fields import FieldLenField, FlagsField, StrLenField, \
-    ThreeBytesField, XBitField, ScalingField, ConditionalField, LenField
+    ThreeBytesField, XBitField, ScalingField, ConditionalField, LenField, ShortField
 from scapy.volatile import RandFloat, RandBinFloat
 from scapy.packet import Packet, bind_layers
 from scapy.layers.l2 import CookedLinux
@@ -31,17 +26,33 @@ from scapy.plist import PacketList
 from scapy.supersocket import SuperSocket
 from scapy.utils import _ByteStream
 
+# Typing imports
+from typing import (
+    Tuple,
+    Optional,
+    Type,
+    List,
+    Union,
+    Callable,
+    IO,
+    Any,
+    cast,
+)
+
 __all__ = ["CAN", "SignalPacket", "SignalField", "LESignedSignalField",
            "LEUnsignedSignalField", "LEFloatSignalField", "BEFloatSignalField",
            "BESignedSignalField", "BEUnsignedSignalField", "rdcandump",
            "CandumpReader", "SignalHeader", "CAN_MTU", "CAN_MAX_IDENTIFIER",
-           "CAN_MAX_DLEN", "CAN_INV_FILTER"]
+           "CAN_MAX_DLEN", "CAN_INV_FILTER", "CANFD", "CAN_FD_MTU",
+           "CAN_FD_MAX_DLEN"]
 
 # CONSTANTS
 CAN_MAX_IDENTIFIER = (1 << 29) - 1  # Maximum 29-bit identifier
 CAN_MTU = 16
 CAN_MAX_DLEN = 8
 CAN_INV_FILTER = 0x20000000
+CAN_FD_MTU = 72
+CAN_FD_MAX_DLEN = 64
 
 # Mimics the Wireshark CAN dissector parameter
 # 'Byte-swap the CAN ID/flags field'.
@@ -93,6 +104,21 @@ class CAN(Packet):
         StrLenField('data', b'', length_from=lambda pkt: int(pkt.length)),
     ]
 
+    @classmethod
+    def dispatch_hook(cls,
+                      _pkt=None,  # type: Optional[bytes]
+                      *args,  # type: Any
+                      **kargs  # type: Any
+                      ):  # type: (...) -> Type[Packet]
+        if _pkt:
+            fdf_set = len(_pkt) > 5 and _pkt[5] & 0x04 and \
+                not _pkt[5] & 0xf8
+            if fdf_set:
+                return CANFD
+            elif len(_pkt) > 4 and _pkt[4] > 8:
+                return CANFD
+        return CAN
+
     @staticmethod
     def inv_endianness(pkt):
         # type: (bytes) -> bytes
@@ -127,7 +153,7 @@ class CAN(Packet):
 
         This is based on a copy of the Packet.self_build default method.
         The goal is to affect only the CAN layer data and keep
-        under layers (e.g LinuxCooked) unchanged
+        under layers (e.g CookedLinux) unchanged
         """
         if conf.contribs['CAN']['swap-bytes']:
             data = CAN.inv_endianness(pkt)  # type: bytes
@@ -144,6 +170,47 @@ class CAN(Packet):
 
 conf.l2types.register(DLT_CAN_SOCKETCAN, CAN)
 bind_layers(CookedLinux, CAN, proto=12)
+
+
+class CANFD(CAN):
+    """
+    This class is used for distinction of CAN FD packets.
+    """
+    fields_desc = [
+        FlagsField('flags', 0, 3, ['error',
+                                   'remote_transmission_request',
+                                   'extended']),
+        XBitField('identifier', 0, 29),
+        FieldLenField('length', None, length_of='data', fmt='B'),
+        FlagsField('fd_flags', 4, 8, ['bit_rate_switch',
+                                      'error_state_indicator',
+                                      'fd_frame']),
+        ShortField('reserved', 0),
+        StrLenField('data', b'', length_from=lambda pkt: int(pkt.length)),
+    ]
+
+    def post_build(self, pkt, pay):
+        # type: (bytes, bytes) -> bytes
+
+        data = super(CANFD, self).post_build(pkt, pay)
+
+        length = data[4]
+
+        if 8 < length <= 24:
+            wire_length = length + (-length) % 4
+        elif 24 < length <= 64:
+            wire_length = length + (-length) % 8
+        elif length > 64:
+            raise NotImplementedError
+        else:
+            wire_length = length
+
+        pad = b"\x00" * (wire_length - length)
+
+        return data[0:4] + chb(wire_length) + data[5:] + pad
+
+
+bind_layers(CookedLinux, CANFD, proto=13)
 
 
 class SignalField(ScalingField):
@@ -427,8 +494,19 @@ class SignalHeader(CAN):
                                    'extended']),
         XBitField('identifier', 0, 29),
         LenField('length', None, fmt='B'),
-        ThreeBytesField('reserved', 0)
+        FlagsField('fd_flags', 0, 8, ['bit_rate_switch',
+                                      'error_state_indicator',
+                                      'fd_frame']),
+        ShortField('reserved', 0)
     ]
+
+    @classmethod
+    def dispatch_hook(cls,
+                      _pkt=None,  # type: Optional[bytes]
+                      *args,  # type: Any
+                      **kargs  # type: Any
+                      ):  # type: (...) -> Type[Packet]
+        return SignalHeader
 
     def extract_padding(self, s):
         # type: (bytes) -> Tuple[bytes, Optional[bytes]]
@@ -468,10 +546,10 @@ class CandumpReader:
         self.filename, self.f = self.open(filename)
         self.ifilter = None  # type: Optional[List[str]]
         if interface is not None:
-            if isinstance(interface, six.string_types):
+            if isinstance(interface, str):
                 self.ifilter = [interface]
             else:
-                self.ifilter = cast(List[str], interface)
+                self.ifilter = interface
 
     def __iter__(self):
         # type: () -> CandumpReader
@@ -540,11 +618,16 @@ class CandumpReader:
         if len(line) < 16:
             raise EOFError
 
-        is_log_file_format = orb(line[0]) == orb(b"(")
-
+        is_log_file_format = line[0] == ord(b"(")
+        fd_flags = None
         if is_log_file_format:
             t_b, intf, f = line.split()
-            idn, data = f.split(b'#')
+            if b'##' in f:
+                idn, data = f.split(b'##')
+                fd_flags = data[0]
+                data = data[1:]
+            else:
+                idn, data = f.split(b'#')
             le = None
             t = float(t_b[1:-1])  # type: Optional[float]
         else:
@@ -559,7 +642,12 @@ class CandumpReader:
         data = data.replace(b' ', b'')
         data = data.strip()
 
-        pkt = CAN(identifier=int(idn, 16), data=binascii.unhexlify(data))
+        if len(data) <= 8 and fd_flags is None:
+            pkt = CAN(identifier=int(idn, 16), data=hex_bytes(data))
+        else:
+            pkt = CANFD(identifier=int(idn, 16), fd_flags=fd_flags,
+                        data=hex_bytes(data))
+
         if le is not None:
             pkt.length = int(le[1:])
         else:
@@ -607,12 +695,20 @@ class CandumpReader:
     def recv(self, size=CAN_MTU):
         # type: (int) -> Optional[Packet]
         """Emulation of SuperSocket"""
-        return self.read_packet(size=size)
+        try:
+            return self.read_packet(size=size)
+        except EOFError:
+            return None
 
     def fileno(self):
         # type: () -> int
         """Emulation of SuperSocket"""
         return self.f.fileno()
+
+    @property
+    def closed(self):
+        # type: () -> bool
+        return self.f.closed
 
     def close(self):
         # type: () -> Any
@@ -631,4 +727,5 @@ class CandumpReader:
     def select(sockets, remain=None):
         # type: (List[SuperSocket], Optional[int]) -> List[SuperSocket]
         """Emulation of SuperSocket"""
-        return sockets
+        return [s for s in sockets if isinstance(s, CandumpReader) and
+                not s.closed]

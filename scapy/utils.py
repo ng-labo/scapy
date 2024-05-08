@@ -1,25 +1,31 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
 
 """
 General utility functions.
 """
 
-from __future__ import absolute_import
-from __future__ import print_function
 
 from decimal import Decimal
+from io import StringIO
+from itertools import zip_longest
 
 import array
+import argparse
 import collections
 import decimal
 import difflib
 import gzip
+import inspect
+import locale
+import math
 import os
+import pickle
 import random
 import re
+import shutil
 import socket
 import struct
 import subprocess
@@ -27,21 +33,31 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import warnings
-
-import scapy.modules.six as six
-from scapy.modules.six.moves import range, input, zip_longest
 
 from scapy.config import conf
 from scapy.consts import DARWIN, OPENBSD, WINDOWS
-from scapy.data import MTU, DLT_EN10MB
-from scapy.compat import orb, plain_str, chb, bytes_base64,\
-    base64_bytes, hex_bytes, lambda_tuple_converter, bytes_encode
-from scapy.error import log_runtime, Scapy_Exception, warning
+from scapy.data import MTU, DLT_EN10MB, DLT_RAW
+from scapy.compat import (
+    orb,
+    plain_str,
+    chb,
+    bytes_base64,
+    base64_bytes,
+    hex_bytes,
+    bytes_encode,
+)
+from scapy.error import (
+    log_interactive,
+    log_runtime,
+    Scapy_Exception,
+    warning,
+)
 from scapy.pton_ntop import inet_pton
 
 # Typing imports
-from scapy.compat import (
+from typing import (
     cast,
     Any,
     AnyStr,
@@ -50,7 +66,6 @@ from scapy.compat import (
     IO,
     Iterator,
     List,
-    Literal,
     Optional,
     TYPE_CHECKING,
     Tuple,
@@ -58,14 +73,16 @@ from scapy.compat import (
     Union,
     overload,
 )
+from scapy.compat import (
+    DecoratorCallable,
+    Literal,
+)
 
 if TYPE_CHECKING:
     from scapy.packet import Packet
     from scapy.plist import _PacketIterable, PacketList
     from scapy.supersocket import SuperSocket
-    _SuperSocket = SuperSocket
-else:
-    _SuperSocket = object
+    import prompt_toolkit
 
 _ByteStream = Union[IO[bytes], gzip.GzipFile]
 
@@ -177,12 +194,12 @@ def get_temp_file(keep, autoext, fd):
 
 
 @overload
-def get_temp_file(keep=False, autoext="", fd=False):  # noqa: F811
+def get_temp_file(keep=False, autoext="", fd=False):
     # type: (bool, str, Literal[False]) -> str
     pass
 
 
-def get_temp_file(keep=False, autoext="", fd=False):  # noqa: F811
+def get_temp_file(keep=False, autoext="", fd=False):
     # type: (bool, str, bool) -> Union[IO[bytes], str]
     """Creates a temporary file.
 
@@ -221,6 +238,34 @@ def get_temp_dir(keep=False):
     return dname
 
 
+def _create_fifo() -> Tuple[str, Any]:
+    """Creates a temporary fifo.
+
+    You must then use open_fifo() on the server_fd once
+    the client is connected to use it.
+
+    :returns: (client_file, server_fd)
+    """
+    if WINDOWS:
+        from scapy.arch.windows.structures import _get_win_fifo
+        return _get_win_fifo()
+    else:
+        f = get_temp_file()
+        os.unlink(f)
+        os.mkfifo(f)
+        return f, f
+
+
+def _open_fifo(fd: Any, mode: str = "rb") -> IO[bytes]:
+    """Open the server_fd (see create_fifo)
+    """
+    if WINDOWS:
+        from scapy.arch.windows.structures import _win_fifo_open
+        return _win_fifo_open(fd)
+    else:
+        return open(fd, mode)
+
+
 def sane(x, color=False):
     # type: (AnyStr, bool) -> str
     r = ""
@@ -243,10 +288,9 @@ def restart():
     if not conf.interactive or not os.path.isfile(sys.argv[0]):
         raise OSError("Scapy was not started from console")
     if WINDOWS:
+        res_code = 1
         try:
             res_code = subprocess.call([sys.executable] + sys.argv)
-        except KeyboardInterrupt:
-            res_code = 1
         finally:
             os._exit(res_code)
     os.execv(sys.executable, [sys.executable] + sys.argv)
@@ -257,7 +301,7 @@ def lhex(x):
     from scapy.volatile import VolatileValue
     if isinstance(x, VolatileValue):
         return repr(x)
-    if isinstance(x, six.integer_types):
+    if isinstance(x, int):
         return hex(x)
     if isinstance(x, tuple):
         return "(%s)" % ", ".join(lhex(v) for v in x)
@@ -361,57 +405,120 @@ def repr_hex(s):
 
 
 @conf.commands.register
-def hexdiff(a, b, autojunk=False):
-    # type: (Union[Packet, AnyStr], Union[Packet, AnyStr], bool) -> None
+def hexdiff(
+    a: Union['Packet', AnyStr],
+    b: Union['Packet', AnyStr],
+    algo: Optional[str] = None,
+    autojunk: bool = False,
+) -> None:
     """
     Show differences between 2 binary strings, Packets...
 
-    For the autojunk parameter, see
-    https://docs.python.org/3.8/library/difflib.html#difflib.SequenceMatcher
+    Available algorithms:
+        - wagnerfischer: Use the Wagner and Fischer algorithm to compute the
+          Levenstein distance between the strings then backtrack.
+        - difflib: Use the difflib.SequenceMatcher implementation. This based on a
+          modified version of the Ratcliff and Obershelp algorithm.
+          This is much faster, but far less accurate.
+          https://docs.python.org/3.8/library/difflib.html#difflib.SequenceMatcher
 
     :param a:
     :param b: The binary strings, packets... to compare
-    :param autojunk: Setting it to True will likely increase the comparison
-        speed a lot on big byte strings, but will reduce accuracy (will tend
-        to miss insertion and see replacements instead for instance).
+    :param algo: Force the algo to be 'wagnerfischer' or 'difflib'.
+                 By default, this is chosen depending on the complexity, optimistically
+                 preferring wagnerfischer unless really necessary.
+    :param autojunk: (difflib only) See difflib documentation.
     """
-
-    # Compare the strings using difflib
-
     xb = bytes_encode(a)
     yb = bytes_encode(b)
 
-    sm = difflib.SequenceMatcher(a=xb, b=yb, autojunk=autojunk)
-    xarr = [xb[i:i + 1] for i in range(len(xb))]
-    yarr = [yb[i:i + 1] for i in range(len(yb))]
+    if algo is None:
+        # Choose the best algorithm
+        complexity = len(xb) * len(yb)
+        if complexity < 1e7:
+            # Comparing two (non-jumbos) Ethernet packets is ~2e6 which is manageable.
+            # Anything much larger than this shouldn't be attempted by default.
+            algo = "wagnerfischer"
+            if complexity > 1e6:
+                log_interactive.info(
+                    "Complexity is a bit high. hexdiff will take a few seconds."
+                )
+        else:
+            algo = "difflib"
 
     backtrackx = []
     backtracky = []
-    for opcode in sm.get_opcodes():
-        typ, x0, x1, y0, y1 = opcode
-        if typ == 'delete':
-            backtrackx += xarr[x0:x1]
-            backtracky += [b''] * (x1 - x0)
-        elif typ == 'insert':
-            backtrackx += [b''] * (y1 - y0)
-            backtracky += yarr[y0:y1]
-        elif typ in ['equal', 'replace']:
-            backtrackx += xarr[x0:x1]
-            backtracky += yarr[y0:y1]
 
-    if autojunk:
+    if algo == "wagnerfischer":
+        xb = xb[::-1]
+        yb = yb[::-1]
+
+        # costs for the 3 operations
+        INSERT = 1
+        DELETE = 1
+        SUBST = 1
+
+        # Typically, d[i,j] will hold the distance between
+        # the first i characters of xb and the first j characters of yb.
+        # We change the Wagner Fischer to also store pointers to all
+        # the intermediate steps taken while calculating the Levenstein distance.
+        d = {(-1, -1): (0, (-1, -1))}
+        for j in range(len(yb)):
+            d[-1, j] = (j + 1) * INSERT, (-1, j - 1)
+        for i in range(len(xb)):
+            d[i, -1] = (i + 1) * INSERT + 1, (i - 1, -1)
+
+        # Compute the Levenstein distance between the two strings, but
+        # store all the steps to be able to backtrack at the end.
+        for j in range(len(yb)):
+            for i in range(len(xb)):
+                d[i, j] = min(
+                    (d[i - 1, j - 1][0] + SUBST * (xb[i] != yb[j]), (i - 1, j - 1)),
+                    (d[i - 1, j][0] + DELETE, (i - 1, j)),
+                    (d[i, j - 1][0] + INSERT, (i, j - 1)),
+                )
+
+        # Iterate through the steps backwards to create the diff
+        i = len(xb) - 1
+        j = len(yb) - 1
+        while not (i == j == -1):
+            i2, j2 = d[i, j][1]
+            backtrackx.append(xb[i2 + 1:i + 1])
+            backtracky.append(yb[j2 + 1:j + 1])
+            i, j = i2, j2
+    elif algo == "difflib":
+        sm = difflib.SequenceMatcher(a=xb, b=yb, autojunk=autojunk)
+        xarr = [xb[i:i + 1] for i in range(len(xb))]
+        yarr = [yb[i:i + 1] for i in range(len(yb))]
+        # Iterate through opcodes to build the backtrack
+        for opcode in sm.get_opcodes():
+            typ, x0, x1, y0, y1 = opcode
+            if typ == 'delete':
+                backtrackx += xarr[x0:x1]
+                backtracky += [b''] * (x1 - x0)
+            elif typ == 'insert':
+                backtrackx += [b''] * (y1 - y0)
+                backtracky += yarr[y0:y1]
+            elif typ in ['equal', 'replace']:
+                backtrackx += xarr[x0:x1]
+                backtracky += yarr[y0:y1]
         # Some lines may have been considered as junk. Check the sizes
-        lbx = len(backtrackx)
-        lby = len(backtracky)
-        backtrackx += [b''] * (max(lbx, lby) - lbx)
-        backtracky += [b''] * (max(lbx, lby) - lby)
+        if autojunk:
+            lbx = len(backtrackx)
+            lby = len(backtracky)
+            backtrackx += [b''] * (max(lbx, lby) - lbx)
+            backtracky += [b''] * (max(lbx, lby) - lby)
+    else:
+        raise ValueError("Unknown algorithm '%s'" % algo)
 
     # Print the diff
 
     x = y = i = 0
-    colorize = {0: lambda x: x,
-                -1: conf.color_theme.left,
-                1: conf.color_theme.right}
+    colorize: Dict[int, Callable[[str], str]] = {
+        0: lambda x: x,
+        -1: conf.color_theme.left,
+        1: conf.color_theme.right
+    }
 
     dox = 1
     doy = 0
@@ -454,7 +561,7 @@ def hexdiff(a, b, autojunk=False):
 
         cl = ""
         for j in range(16):
-            if i + j < btx_len:
+            if i + j < min(len(backtrackx), len(backtracky)):
                 if line[j]:
                     col = colorize[(linex[j] != liney[j]) * (doy - dox)]
                     print(col("%02X" % orb(line[j])), end=' ')
@@ -506,7 +613,7 @@ def _fletcher16(charbuf):
     # This is based on the GPLed C implementation in Zebra <http://www.zebra.org/>  # noqa: E501
     c0 = c1 = 0
     for char in charbuf:
-        c0 += orb(char)
+        c0 += char
         c1 += c0
 
     c0 %= 255
@@ -615,6 +722,18 @@ def strand(s1, s2):
     return b"".join(map(lambda x, y: chb(orb(x) & orb(y)), s1, s2))
 
 
+def strrot(s1, count, right=True):
+    # type: (bytes, int, bool) -> bytes
+    """
+    Rotate the binary by 'count' bytes
+    """
+    off = count % len(s1)
+    if right:
+        return s1[-off:] + s1[:-off]
+    else:
+        return s1[off:] + s1[:off]
+
+
 # Workaround bug 643005 : https://sourceforge.net/tracker/?func=detail&atid=105470&aid=643005&group_id=5470  # noqa: E501
 try:
     socket.inet_aton("255.255.255.255")
@@ -626,7 +745,7 @@ except socket.error:
         else:
             return socket.inet_aton(ip_string)
 else:
-    inet_aton = socket.inet_aton
+    inet_aton = socket.inet_aton  # type: ignore
 
 inet_ntoa = socket.inet_ntoa
 
@@ -636,7 +755,7 @@ def atol(x):
     try:
         ip = inet_aton(x)
     except socket.error:
-        ip = inet_aton(socket.gethostbyname(x))
+        raise ValueError("Bad IP format: %s" % x)
     return cast(int, struct.unpack("!I", ip)[0])
 
 
@@ -674,10 +793,7 @@ def valid_ip6(addr):
     try:
         inet_pton(socket.AF_INET6, addr)
     except socket.error:
-        try:
-            socket.getaddrinfo(addr, None, socket.AF_INET6)[0][4][0]
-        except socket.error:
-            return False
+        return False
     return True
 
 
@@ -701,6 +817,15 @@ def ltoa(x):
 def itom(x):
     # type: (int) -> int
     return (0xffffffff00000000 >> x) & 0xffffffff
+
+
+def decode_locale_str(x):
+    # type: (bytes) -> str
+    """
+    Decode bytes into a string using the system locale.
+    Useful on Windows where it can be unusual (e.g. cp1252)
+    """
+    return x.decode(encoding=locale.getlocale()[1] or "utf-8", errors="replace")
 
 
 class ContextManagerSubprocess(object):
@@ -868,8 +993,8 @@ def do_graph(
                 warning("Temporary file '%s' could not be written. Graphic will not be displayed.", tempfile)  # noqa: E501
                 break
         else:
-            if conf.prog.display == conf.prog._default:
-                os.startfile(target.name)  # type: ignore
+            if WINDOWS and conf.prog.display == conf.prog._default:
+                os.startfile(target.name)
             else:
                 with ContextManagerSubprocess(conf.prog.display):
                     subprocess.Popen([conf.prog.display, target.name])
@@ -984,7 +1109,7 @@ class Enum_metaclass(type):
     def __new__(cls, name, bases, dct):
         # type: (Any, str, Any, Dict[str, Any]) -> Any
         rdict = {}
-        for k, v in six.iteritems(dct):
+        for k, v in dct.items():
             if isinstance(v, int):
                 v = cls.element_class(k, v)
                 dct[k] = v
@@ -1017,7 +1142,7 @@ class Enum_metaclass(type):
 def export_object(obj):
     # type: (Any) -> None
     import zlib
-    print(bytes_base64(zlib.compress(six.moves.cPickle.dumps(obj, 2), 9)))
+    print(bytes_base64(zlib.compress(pickle.dumps(obj, 2), 9)))
 
 
 def import_object(obj=None):
@@ -1025,7 +1150,7 @@ def import_object(obj=None):
     import zlib
     if obj is None:
         obj = sys.stdin.read()
-    return six.moves.cPickle.loads(zlib.decompress(base64_bytes(obj.strip())))  # noqa: E501
+    return pickle.loads(zlib.decompress(base64_bytes(obj.strip())))  # noqa: E501
 
 
 def save_object(fname, obj):
@@ -1033,14 +1158,14 @@ def save_object(fname, obj):
     """Pickle a Python object"""
 
     fd = gzip.open(fname, "wb")
-    six.moves.cPickle.dump(obj, fd)
+    pickle.dump(obj, fd)
     fd.close()
 
 
 def load_object(fname):
     # type: (str) -> Any
     """unpickle a Python object"""
-    return six.moves.cPickle.load(gzip.open(fname, "rb"))
+    return pickle.load(gzip.open(fname, "rb"))
 
 
 @conf.commands.register
@@ -1056,7 +1181,7 @@ def corrupt_bytes(data, p=0.01, n=None):
         n = max(1, int(s_len * p))
     for i in random.sample(range(s_len), n):
         s[i] = (s[i] + random.randint(1, 255)) % 256
-    return s.tostring() if six.PY2 else s.tobytes()  # type: ignore
+    return s.tobytes()
 
 
 @conf.commands.register
@@ -1072,7 +1197,7 @@ def corrupt_bits(data, p=0.01, n=None):
         n = max(1, int(s_len * p))
     for i in random.sample(range(s_len), n):
         s[i // 8] ^= 1 << (i % 8)
-    return s.tostring() if six.PY2 else s.tobytes()  # type: ignore
+    return s.tobytes()
 
 
 #############################
@@ -1099,6 +1224,24 @@ def wrpcap(filename,  # type: Union[IO[bytes], str]
     :param sync: do not bufferize writes to the capture file
     """
     with PcapWriter(filename, *args, **kargs) as fdesc:
+        fdesc.write(pkt)
+
+
+@conf.commands.register
+def wrpcapng(filename,  # type: str
+             pkt,  # type: _PacketIterable
+             ):
+    # type: (...) -> None
+    """Write a list of packets to a pcapng file
+
+    :param filename: the name of the file to write packets to, or an open,
+        writable file-like object. The file descriptor will be
+        closed at the end of the call, so do not use an object you
+        do not want to close (e.g., running wrpcapng(sys.stdout, [])
+        in interactive mode will crash Scapy).
+    :param pkt: packets to write
+    """
+    with PcapNgWriter(filename) as fdesc:
         fdesc.write(pkt)
 
 
@@ -1141,13 +1284,18 @@ class PcapReader_metaclass(type):
             dct['alternative'].alternative = newcls
         return newcls
 
-    def __call__(cls, filename):  # type: ignore
+    def __call__(cls, filename):
         # type: (Union[IO[bytes], str]) -> Any
         """Creates a cls instance, use the `alternative` if that
         fails.
 
         """
-        i = cls.__new__(cls, cls.__name__, cls.__bases__, cls.__dict__)
+        i = cls.__new__(
+            cls,
+            cls.__name__,
+            cls.__bases__,
+            cls.__dict__  # type: ignore
+        )
         filename, fdesc, magic = cls.open(filename)
         if not magic:
             raise Scapy_Exception(
@@ -1161,7 +1309,12 @@ class PcapReader_metaclass(type):
 
         if "alternative" in cls.__dict__:
             cls = cls.__dict__["alternative"]
-            i = cls.__new__(cls, cls.__name__, cls.__bases__, cls.__dict__)
+            i = cls.__new__(
+                cls,
+                cls.__name__,
+                cls.__bases__,
+                cls.__dict__  # type: ignore
+            )
             try:
                 i.__init__(filename, fdesc, magic)
                 return i
@@ -1190,8 +1343,7 @@ class PcapReader_metaclass(type):
         return filename, fdesc, magic
 
 
-@six.add_metaclass(PcapReader_metaclass)
-class RawPcapReader:
+class RawPcapReader(metaclass=PcapReader_metaclass):
     """A stateful pcap reader. Each packet is returned as a string"""
 
     # TODO: use Generics to properly type the various readers.
@@ -1231,23 +1383,23 @@ class RawPcapReader:
         self.linktype = linktype
         self.snaplen = snaplen
 
+    def __enter__(self):
+        # type: () -> RawPcapReader
+        return self
+
     def __iter__(self):
         # type: () -> RawPcapReader
         return self
 
-    def next(self):
-        # type: () -> Packet
+    def __next__(self):
+        # type: () -> Tuple[bytes, RawPcapReader.PacketMetadata]
         """
         implement the iterator protocol on a set of packets in a pcap file
         """
         try:
-            return self._read_packet()  # type: ignore
+            return self._read_packet()
         except EOFError:
             raise StopIteration
-
-    def __next__(self):
-        # type: () -> Packet
-        return self.next()
 
     def _read_packet(self, size=MTU):
         # type: (int) -> Tuple[bytes, RawPcapReader.PacketMetadata]
@@ -1325,7 +1477,7 @@ class RawPcapReader:
         return sockets
 
 
-class PcapReader(RawPcapReader, _SuperSocket):
+class PcapReader(RawPcapReader):
     def __init__(self, filename, fdesc=None, magic=None):  # type: ignore
         # type: (str, IO[bytes], bytes) -> None
         RawPcapReader.__init__(self, filename, fdesc, magic)
@@ -1344,15 +1496,15 @@ class PcapReader(RawPcapReader, _SuperSocket):
         # type: () -> PcapReader
         return self
 
-    def read_packet(self, size=MTU):
-        # type: (int) -> Packet
+    def read_packet(self, size=MTU, **kwargs):
+        # type: (int, **Any) -> Packet
         rp = super(PcapReader, self)._read_packet(size=size)
         if rp is None:
             raise EOFError
         s, pkt_info = rp
 
         try:
-            p = self.LLcls(s)  # type: Packet
+            p = self.LLcls(s, **kwargs)  # type: Packet
         except KeyboardInterrupt:
             raise
         except Exception:
@@ -1369,11 +1521,11 @@ class PcapReader(RawPcapReader, _SuperSocket):
         p.wirelen = pkt_info.wirelen
         return p
 
-    def recv(self, size=MTU):
-        # type: (int) -> Packet
-        return self.read_packet(size=size)
+    def recv(self, size=MTU, **kwargs):  # type: ignore
+        # type: (int, **Any) -> Packet
+        return self.read_packet(size=size, **kwargs)
 
-    def next(self):
+    def __next__(self):  # type: ignore
         # type: () -> Packet
         try:
             return self.read_packet()
@@ -1395,24 +1547,31 @@ class RawPcapNgReader(RawPcapReader):
 
     alternative = RawPcapReader  # type: Type[Any]
 
-    PacketMetadata = collections.namedtuple("PacketMetadataNg",
+    PacketMetadata = collections.namedtuple("PacketMetadataNg",  # type: ignore
                                             ["linktype", "tsresol",
-                                             "tshigh", "tslow", "wirelen"])
+                                             "tshigh", "tslow", "wirelen",
+                                             "comment", "ifname", "direction"])
 
     def __init__(self, filename, fdesc=None, magic=None):  # type: ignore
         # type: (str, IO[bytes], bytes) -> None
         self.filename = filename
         self.f = fdesc
         # A list of (linktype, snaplen, tsresol); will be populated by IDBs.
-        self.interfaces = []  # type: List[Tuple[int, int, int]]
+        self.interfaces = []  # type: List[Tuple[int, int, Dict[str, Any]]]
         self.default_options = {
             "tsresol": 1000000
         }
-        self.blocktypes = {
-            1: self._read_block_idb,
-            2: self._read_block_pkt,
-            3: self._read_block_spb,
-            6: self._read_block_epb,
+        self.blocktypes: Dict[
+            int,
+            Callable[
+                [bytes, int],
+                Optional[Tuple[bytes, RawPcapNgReader.PacketMetadata]]
+            ]] = {
+                1: self._read_block_idb,
+                2: self._read_block_pkt,
+                3: self._read_block_spb,
+                6: self._read_block_epb,
+                10: self._read_block_dsb,
         }
         self.endian = "!"  # Will be overwritten by first SHB
 
@@ -1441,16 +1600,16 @@ class RawPcapNgReader(RawPcapReader):
         try:
             blocklen = struct.unpack(self.endian + "I", self.f.read(4))[0]
         except struct.error:
+            warning("PcapNg: Error reading blocklen before block body")
             raise EOFError
         if blocklen < 12:
             warning("Invalid block length !")
             raise EOFError
         block = self.f.read(blocklen - 12)
         self._read_block_tail(blocklen)
-        return self.blocktypes.get(
-            blocktype,
-            lambda block, size: None
-        )(block, size)
+        if blocktype in self.blocktypes:
+            return self.blocktypes[blocktype](block, size)
+        return None
 
     def _read_block_tail(self, blocklen):
         # type: (int) -> None
@@ -1463,10 +1622,12 @@ class RawPcapNgReader(RawPcapReader):
                                          self.f.read(4))[0]:
                 raise EOFError("PcapNg: Invalid pcapng block (bad blocklen)")
         except struct.error:
+            warning("PcapNg: Could not read blocklen after block body")
             raise EOFError
 
     def _read_block_shb(self):
         # type: () -> None
+        """Section Header Block"""
         _blocklen = self.f.read(4)
         endian = self.f.read(4)
         if endian == b"\x1a\x2b\x3c\x4d":
@@ -1478,10 +1639,21 @@ class RawPcapNgReader(RawPcapReader):
             raise EOFError
 
         blocklen = struct.unpack(self.endian + "I", _blocklen)[0]
-        if blocklen < 16:
-            warning("Invalid SHB block length!")
+        if blocklen < 28:
+            warning(f"Invalid SHB block length ({blocklen})!")
             raise EOFError
-        options = self.f.read(blocklen - 16)
+
+        # Major version must be 1
+        _major = self.f.read(2)
+        major = struct.unpack(self.endian + "H", _major)[0]
+        if major != 1:
+            warning(f"SHB Major version {major} unsupported !")
+            raise EOFError
+
+        # Skip minor version & section length
+        self.f.read(10)
+
+        options = self.f.read(blocklen - 28)
         self._read_block_tail(blocklen)
         self._read_options(options)
 
@@ -1498,22 +1670,16 @@ class RawPcapNgReader(RawPcapReader):
                 return res
 
     def _read_options(self, options):
-        # type: (bytes) -> Dict[str, int]
-        """Section Header Block"""
-        opts = self.default_options.copy()
+        # type: (bytes) -> Dict[int, bytes]
+        opts = dict()
         while len(options) >= 4:
             code, length = struct.unpack(self.endian + "HH", options[:4])
-            # PCAP Next Generation (pcapng) Capture File Format
-            # 4.2. - Interface Description Block
-            # http://xml2rfc.tools.ietf.org/cgi-bin/xml2rfc.cgi?url=https://raw.githubusercontent.com/pcapng/pcapng/master/draft-tuexen-opsawg-pcapng.xml&modeAsFormat=html/ascii&type=ascii#rfc.section.4.2
-            if code == 9 and length == 1 and len(options) >= 5:
-                tsresol = orb(options[4])
-                opts["tsresol"] = (2 if tsresol & 128 else 10) ** (
-                    tsresol & 127
-                )
+            if code != 0 and 4 + length < len(options):
+                opts[code] = options[4:4 + length]
             if code == 0:
                 if length != 0:
-                    warning("PcapNg: invalid option length %d for end-of-option" % length)  # noqa: E501
+                    warning("PcapNg: invalid option "
+                            "length %d for end-of-option" % length)
                 break
             if length % 4:
                 length += (4 - (length % 4))
@@ -1525,12 +1691,28 @@ class RawPcapNgReader(RawPcapReader):
         """Interface Description Block"""
         # 2 bytes LinkType + 2 bytes Reserved
         # 4 bytes Snaplen
-        options = self._read_options(block[8:-4])
+        options_raw = self._read_options(block[8:])
+        options = self.default_options.copy()  # type: Dict[str, Any]
+        for c, v in options_raw.items():
+            if c == 9:
+                length = len(v)
+                if length == 1:
+                    tsresol = orb(v)
+                    options["tsresol"] = (2 if tsresol & 128 else 10) ** (
+                        tsresol & 127
+                    )
+                else:
+                    warning("PcapNg: invalid options "
+                            "length %d for IDB tsresol" % length)
+            elif c == 2:
+                options["name"] = v
+            elif c == 1:
+                options["comment"] = v
         try:
-            interface = struct.unpack(  # type: ignore
+            interface: Tuple[int, int, Dict[str, Any]] = struct.unpack(
                 self.endian + "HxxI",
                 block[:8]
-            ) + (options["tsresol"],)  # type: Tuple[int, int, int]
+            ) + (options,)
         except struct.error:
             warning("PcapNg: IDB is too small %d/8 !" % len(block))
             raise EOFError
@@ -1556,13 +1738,39 @@ class RawPcapNgReader(RawPcapReader):
             warning("PcapNg: EPB is too small %d/20 !" % len(block))
             raise EOFError
 
+        # Compute the options offset taking padding into account
+        if caplen % 4:
+            opt_offset = 20 + caplen + (-caplen) % 4
+        else:
+            opt_offset = 20 + caplen
+
+        # Parse options
+        options = self._read_options(block[opt_offset:])
+        comment = options.get(1, None)
+        epb_flags_raw = options.get(2, None)
+        if epb_flags_raw:
+            try:
+                epb_flags, = struct.unpack(self.endian + "I", epb_flags_raw)
+            except struct.error:
+                warning("PcapNg: EPB invalid flags size"
+                        "(expected 4 bytes, got %d) !" % len(epb_flags_raw))
+                raise EOFError
+            direction = epb_flags & 3
+
+        else:
+            direction = None
+
         self._check_interface_id(intid)
+        ifname = self.interfaces[intid][2].get('name', None)
         return (block[20:20 + caplen][:size],
                 RawPcapNgReader.PacketMetadata(linktype=self.interfaces[intid][0],  # noqa: E501
-                                               tsresol=self.interfaces[intid][2],  # noqa: E501
+                                               tsresol=self.interfaces[intid][2]['tsresol'],  # noqa: E501
                                                tshigh=tshigh,
                                                tslow=tslow,
-                                               wirelen=wirelen))
+                                               wirelen=wirelen,
+                                               comment=comment,
+                                               ifname=ifname,
+                                               direction=direction))
 
     def _read_block_spb(self, block, size):
         # type: (bytes, int) -> Tuple[bytes, RawPcapNgReader.PacketMetadata]
@@ -1582,10 +1790,13 @@ class RawPcapNgReader(RawPcapReader):
         caplen = min(wirelen, self.interfaces[intid][1])
         return (block[4:4 + caplen][:size],
                 RawPcapNgReader.PacketMetadata(linktype=self.interfaces[intid][0],  # noqa: E501
-                                               tsresol=self.interfaces[intid][2],  # noqa: E501
+                                               tsresol=self.interfaces[intid][2]['tsresol'],  # noqa: E501
                                                tshigh=None,
                                                tslow=None,
-                                               wirelen=wirelen))
+                                               wirelen=wirelen,
+                                               comment=None,
+                                               ifname=None,
+                                               direction=None))
 
     def _read_block_pkt(self, block, size):
         # type: (bytes, int) -> Tuple[bytes, RawPcapNgReader.PacketMetadata]
@@ -1602,13 +1813,68 @@ class RawPcapNgReader(RawPcapReader):
         self._check_interface_id(intid)
         return (block[20:20 + caplen][:size],
                 RawPcapNgReader.PacketMetadata(linktype=self.interfaces[intid][0],  # noqa: E501
-                                               tsresol=self.interfaces[intid][2],  # noqa: E501
+                                               tsresol=self.interfaces[intid][2]['tsresol'],  # noqa: E501
                                                tshigh=tshigh,
                                                tslow=tslow,
-                                               wirelen=wirelen))
+                                               wirelen=wirelen,
+                                               comment=None,
+                                               ifname=None,
+                                               direction=None))
+
+    def _read_block_dsb(self, block, size):
+        # type: (bytes, int) -> None
+        """Decryption Secrets Block"""
+
+        # Parse the secrets type and length fields
+        try:
+            secrets_type, secrets_length = struct.unpack(
+                self.endian + "II",
+                block[:8],
+            )
+            block = block[8:]
+        except struct.error:
+            warning("PcapNg: DSB is too small %d!", len(block))
+            raise EOFError
+
+        # Compute the secrets length including the padding
+        padded_secrets_length = secrets_length + (-secrets_length) % 4
+        if len(block) < padded_secrets_length:
+            warning("PcapNg: invalid DSB secrets length!")
+            raise EOFError
+
+        # Extract secrets data and options
+        secrets_data = block[:padded_secrets_length][:secrets_length]
+        if block[padded_secrets_length:]:
+            warning("PcapNg: DSB options are not supported!")
+
+        # TLS Key Log
+        if secrets_type == 0x544c534b:
+            if getattr(conf, "tls_sessions", False) is False:
+                warning("PcapNg: TLS Key Log available, but "
+                        "the TLS layer is not loaded! Scapy won't be able "
+                        "to decrypt the packets.")
+            else:
+                from scapy.layers.tls.session import load_nss_keys
+
+                # Write Key Log to a file and parse it
+                filename = get_temp_file()
+                with open(filename, "wb") as fd:
+                    fd.write(secrets_data)
+                    fd.close()
+
+                keys = load_nss_keys(filename)
+                if not keys:
+                    warning("PcapNg: invalid TLS Key Log in DSB!")
+                else:
+                    # Note: these attributes are only available when the TLS
+                    #       layer is loaded.
+                    conf.tls_nss_keys = keys
+                    conf.tls_session_enable = True
+        else:
+            warning("PcapNg: Unknown DSB secrets type (0x%x)!", secrets_type)
 
 
-class PcapNgReader(RawPcapNgReader, PcapReader, _SuperSocket):
+class PcapNgReader(RawPcapNgReader, PcapReader):
 
     alternative = PcapReader
 
@@ -1620,15 +1886,15 @@ class PcapNgReader(RawPcapNgReader, PcapReader, _SuperSocket):
         # type: () -> PcapNgReader
         return self
 
-    def read_packet(self, size=MTU):
-        # type: (int) -> Packet
+    def read_packet(self, size=MTU, **kwargs):
+        # type: (int, **Any) -> Packet
         rp = super(PcapNgReader, self)._read_packet(size=size)
         if rp is None:
             raise EOFError
-        s, (linktype, tsresol, tshigh, tslow, wirelen) = rp
+        s, (linktype, tsresol, tshigh, tslow, wirelen, comment, ifname, direction) = rp
         try:
             cls = conf.l2types.num2layer[linktype]  # type: Type[Packet]
-            p = cls(s)  # type: Packet
+            p = cls(s, **kwargs)  # type: Packet
         except KeyboardInterrupt:
             raise
         except Exception:
@@ -1641,102 +1907,164 @@ class PcapNgReader(RawPcapNgReader, PcapReader, _SuperSocket):
         if tshigh is not None:
             p.time = EDecimal((tshigh << 32) + tslow) / tsresol
         p.wirelen = wirelen
+        p.comment = comment
+        p.direction = direction
+        if ifname is not None:
+            p.sniffed_on = ifname.decode('utf-8')
         return p
 
-    def recv(self, size=MTU):
-        # type: (int) -> Packet
-        return self.read_packet()
+    def recv(self, size: int = MTU, **kwargs: Any) -> 'Packet':  # type: ignore
+        return self.read_packet(size=size, **kwargs)
 
 
-class RawPcapWriter:
-    """A stream PCAP writer with more control than wrpcap()"""
+class GenericPcapWriter(object):
+    nano = False
+    linktype: int
 
-    def __init__(self,
-                 filename,  # type: Union[IO[bytes], str]
-                 linktype=None,  # type: Optional[int]
-                 gz=False,  # type: bool
-                 endianness="",  # type: str
-                 append=False,  # type: bool
-                 sync=False,  # type: bool
-                 nano=False,  # type: bool
-                 snaplen=MTU,  # type: int
-                 ):
+    def _write_header(self, pkt):
+        # type: (Optional[Union[Packet, bytes]]) -> None
+        raise NotImplementedError
+
+    def _write_packet(self,
+                      packet,  # type: Union[bytes, Packet]
+                      linktype,  # type: int
+                      sec=None,  # type: Optional[float]
+                      usec=None,  # type: Optional[int]
+                      caplen=None,  # type: Optional[int]
+                      wirelen=None,  # type: Optional[int]
+                      comment=None,  # type: Optional[bytes]
+                      ifname=None,  # type: Optional[bytes]
+                      direction=None,  # type: Optional[int]
+                      ):
+        # type: (...) -> None
+        raise NotImplementedError
+
+    def _get_time(self,
+                  packet,  # type: Union[bytes, Packet]
+                  sec,  # type: Optional[float]
+                  usec  # type: Optional[int]
+                  ):
+        # type: (...) -> Tuple[float, int]
+        if hasattr(packet, "time"):
+            if sec is None:
+                packet_time = packet.time
+                tmp = int(packet_time)
+                usec = int(round((packet_time - tmp) *
+                           (1000000000 if self.nano else 1000000)))
+                sec = float(packet_time)
+        if sec is not None and usec is None:
+            usec = 0
+        return sec, usec  # type: ignore
+
+    def write_header(self, pkt):
+        # type: (Optional[Union[Packet, bytes]]) -> None
+        if not hasattr(self, 'linktype'):
+            try:
+                if pkt is None or isinstance(pkt, bytes):
+                    # Can't guess LL
+                    raise KeyError
+                self.linktype = conf.l2types.layer2num[
+                    pkt.__class__
+                ]
+            except KeyError:
+                msg = "%s: unknown LL type for %s. Using type 1 (Ethernet)"
+                warning(msg, self.__class__.__name__, pkt.__class__.__name__)
+                self.linktype = DLT_EN10MB
+        self._write_header(pkt)
+
+    def write_packet(self,
+                     packet,  # type: Union[bytes, Packet]
+                     sec=None,  # type: Optional[float]
+                     usec=None,  # type: Optional[int]
+                     caplen=None,  # type: Optional[int]
+                     wirelen=None,  # type: Optional[int]
+                     ):
         # type: (...) -> None
         """
-        :param filename: the name of the file to write packets to, or an open,
-            writable file-like object.
-        :param linktype: force linktype to a given value. If None, linktype is
-            taken from the first writer packet
-        :param gz: compress the capture on the fly
-        :param endianness: force an endianness (little:"<", big:">").
-            Default is native
-        :param append: append packets to the capture file instead of
-            truncating it
-        :param sync: do not bufferize writes to the capture file
-        :param nano: use nanosecond-precision (requires libpcap >= 1.5.0)
+        Writes a single packet to the pcap file.
 
+        :param packet: Packet, or bytes for a single packet
+        :type packet: scapy.packet.Packet or bytes
+        :param sec: time the packet was captured, in seconds since epoch. If
+                    not supplied, defaults to now.
+        :type sec: float
+        :param usec: If ``nano=True``, then number of nanoseconds after the
+                     second that the packet was captured. If ``nano=False``,
+                     then the number of microseconds after the second the
+                     packet was captured. If ``sec`` is not specified,
+                     this value is ignored.
+        :type usec: int or long
+        :param caplen: The length of the packet in the capture file. If not
+                       specified, uses ``len(raw(packet))``.
+        :type caplen: int
+        :param wirelen: The length of the packet on the wire. If not
+                        specified, tries ``packet.wirelen``, otherwise uses
+                        ``caplen``.
+        :type wirelen: int
+        :return: None
+        :rtype: None
         """
+        f_sec, usec = self._get_time(packet, sec, usec)
 
-        self.linktype = linktype
-        self.snaplen = snaplen
-        self.header_present = 0
-        self.append = append
-        self.gz = gz
-        self.endian = endianness
-        self.sync = sync
-        self.nano = nano
-        bufsz = 4096
-        if sync:
-            bufsz = 0
+        rawpkt = bytes_encode(packet)
+        caplen = len(rawpkt) if caplen is None else caplen
 
-        if isinstance(filename, str):
-            self.filename = filename
-            if gz:
-                self.f = cast(_ByteStream, gzip.open(
-                    filename, append and "ab" or "wb", 9
-                ))
-            else:
-                self.f = open(filename, append and "ab" or "wb", bufsz)
+        if wirelen is None:
+            if hasattr(packet, "wirelen"):
+                wirelen = packet.wirelen
+        if wirelen is None:
+            wirelen = caplen
+
+        comment = getattr(packet, "comment", None)
+        ifname = getattr(packet, "sniffed_on", None)
+        direction = getattr(packet, "direction", None)
+        if not isinstance(packet, bytes):
+            linktype: int = conf.l2types.layer2num[
+                packet.__class__
+            ]
         else:
-            self.f = filename
-            self.filename = getattr(filename, "name", "No name")
+            linktype = self.linktype
+        if ifname is not None:
+            ifname = str(ifname).encode('utf-8')
+        self._write_packet(
+            rawpkt,
+            sec=f_sec, usec=usec,
+            caplen=caplen, wirelen=wirelen,
+            comment=comment,
+            ifname=ifname,
+            direction=direction,
+            linktype=linktype
+        )
+
+
+class GenericRawPcapWriter(GenericPcapWriter):
+    header_present = False
+    nano = False
+    sync = False
+    f = None  # type: Union[IO[bytes], gzip.GzipFile]
 
     def fileno(self):
         # type: () -> int
         return -1 if WINDOWS else self.f.fileno()
 
-    def write_header(self, pkt):
-        # type: (Optional[Union[Packet, bytes]]) -> None
-        return self._write_header(bytes_encode(pkt))
+    def flush(self):
+        # type: () -> Optional[Any]
+        return self.f.flush()
 
-    def _write_header(self, pkt):
-        # type: (Optional[Union[Packet, bytes]]) -> None
-        self.header_present = 1
+    def close(self):
+        # type: () -> Optional[Any]
+        if not self.header_present:
+            self.write_header(None)
+        return self.f.close()
 
-        if self.append:
-            # Even if prone to race conditions, this seems to be
-            # safest way to tell whether the header is already present
-            # because we have to handle compressed streams that
-            # are not as flexible as basic files
-            if self.gz:
-                g = gzip.open(self.filename, "rb")  # type: _ByteStream
-            else:
-                g = open(self.filename, "rb")
-            try:
-                if g.read(16):
-                    return
-            finally:
-                g.close()
+    def __enter__(self):
+        # type: () -> GenericRawPcapWriter
+        return self
 
-        if self.linktype is None:
-            raise ValueError(
-                "linktype could not be guessed. "
-                "Please pass a linktype while creating the writer"
-            )
-
-        self.f.write(struct.pack(self.endian + "IHHIIII", 0xa1b23c4d if self.nano else 0xa1b2c3d4,  # noqa: E501
-                                 2, 4, 0, 0, self.snaplen, self.linktype))
-        self.f.flush()
+    def __exit__(self, exc_type, exc_value, tracback):
+        # type: (Optional[Any], Optional[Any], Optional[Any]) -> None
+        self.flush()
+        self.close()
 
     def write(self, pkt):
         # type: (Union[_PacketIterable, bytes]) -> None
@@ -1761,32 +2089,105 @@ class RawPcapWriter:
                 if not isinstance(p, bytes) and \
                         self.linktype != conf.l2types.get(type(p), None):
                     warning("Inconsistent linktypes detected!"
-                            " The resulting PCAP file might contain"
+                            " The resulting file might contain"
                             " invalid packets."
                             )
 
                 self.write_packet(p)
 
-    def write_packet(self,
-                     packet,  # type: Union[bytes, Packet]
-                     sec=None,  # type: Optional[int]
-                     usec=None,  # type: Optional[int]
-                     caplen=None,  # type: Optional[int]
-                     wirelen=None,  # type: Optional[int]
-                     ):
+
+class RawPcapWriter(GenericRawPcapWriter):
+    """A stream PCAP writer with more control than wrpcap()"""
+
+    def __init__(self,
+                 filename,  # type: Union[IO[bytes], str]
+                 linktype=None,  # type: Optional[int]
+                 gz=False,  # type: bool
+                 endianness="",  # type: str
+                 append=False,  # type: bool
+                 sync=False,  # type: bool
+                 nano=False,  # type: bool
+                 snaplen=MTU,  # type: int
+                 bufsz=4096,  # type: int
+                 ):
         # type: (...) -> None
-        self._write_packet(
-            bytes(packet),
-            sec=sec, usec=usec,
-            caplen=caplen, wirelen=wirelen
-        )
+        """
+        :param filename: the name of the file to write packets to, or an open,
+            writable file-like object.
+        :param linktype: force linktype to a given value. If None, linktype is
+            taken from the first writer packet
+        :param gz: compress the capture on the fly
+        :param endianness: force an endianness (little:"<", big:">").
+            Default is native
+        :param append: append packets to the capture file instead of
+            truncating it
+        :param sync: do not bufferize writes to the capture file
+        :param nano: use nanosecond-precision (requires libpcap >= 1.5.0)
+
+        """
+
+        if linktype:
+            self.linktype = linktype
+        self.snaplen = snaplen
+        self.append = append
+        self.gz = gz
+        self.endian = endianness
+        self.sync = sync
+        self.nano = nano
+        if sync:
+            bufsz = 0
+
+        if isinstance(filename, str):
+            self.filename = filename
+            if gz:
+                self.f = cast(_ByteStream, gzip.open(
+                    filename, append and "ab" or "wb", 9
+                ))
+            else:
+                self.f = open(filename, append and "ab" or "wb", bufsz)
+        else:
+            self.f = filename
+            self.filename = getattr(filename, "name", "No name")
+
+    def _write_header(self, pkt):
+        # type: (Optional[Union[Packet, bytes]]) -> None
+        self.header_present = True
+
+        if self.append:
+            # Even if prone to race conditions, this seems to be
+            # safest way to tell whether the header is already present
+            # because we have to handle compressed streams that
+            # are not as flexible as basic files
+            if self.gz:
+                g = gzip.open(self.filename, "rb")  # type: _ByteStream
+            else:
+                g = open(self.filename, "rb")
+            try:
+                if g.read(16):
+                    return
+            finally:
+                g.close()
+
+        if not hasattr(self, 'linktype'):
+            raise ValueError(
+                "linktype could not be guessed. "
+                "Please pass a linktype while creating the writer"
+            )
+
+        self.f.write(struct.pack(self.endian + "IHHIIII", 0xa1b23c4d if self.nano else 0xa1b2c3d4,  # noqa: E501
+                                 2, 4, 0, 0, self.snaplen, self.linktype))
+        self.f.flush()
 
     def _write_packet(self,
-                      packet,  # type: bytes
-                      sec=None,  # type: Optional[int]
+                      packet,  # type: Union[bytes, Packet]
+                      linktype,  # type: int
+                      sec=None,  # type: Optional[float]
                       usec=None,  # type: Optional[int]
                       caplen=None,  # type: Optional[int]
-                      wirelen=None  # type: Optional[int]
+                      wirelen=None,  # type: Optional[int]
+                      comment=None,  # type: Optional[bytes]
+                      ifname=None,  # type: Optional[bytes]
+                      direction=None,  # type: Optional[int]
                       ):
         # type: (...) -> None
         """
@@ -1794,12 +2195,12 @@ class RawPcapWriter:
 
         :param packet: bytes for a single packet
         :type packet: bytes
+        :param linktype: linktype value associated with the packet
+        :type linktype: int
         :param sec: time the packet was captured, in seconds since epoch. If
                     not supplied, defaults to now.
-        :type sec: int or long
-        :param usec: If ``nano=True``, then number of nanoseconds after the
-                     second that the packet was captured. If ``nano=False``,
-                     then the number of microseconds after the second the
+        :type sec: float
+        :param usec: not used with pcapng
                      packet was captured
         :type usec: int or long
         :param caplen: The length of the packet in the capture file. If not
@@ -1826,103 +2227,501 @@ class RawPcapWriter:
                 usec = 0
 
         self.f.write(struct.pack(self.endian + "IIII",
-                                 sec, usec, caplen, wirelen))
-        self.f.write(packet)
+                                 int(sec), usec, caplen, wirelen))
+        self.f.write(bytes(packet))
         if self.sync:
             self.f.flush()
 
-    def flush(self):
-        # type: () -> Optional[Any]
-        return self.f.flush()
 
-    def close(self):
-        # type: () -> Optional[Any]
-        if not self.header_present:
-            self.write_header(None)
-        return self.f.close()
+class RawPcapNgWriter(GenericRawPcapWriter):
+    """A stream pcapng writer with more control than wrpcapng()"""
 
-    def __enter__(self):
-        # type: () -> RawPcapWriter
-        return self
+    def __init__(self,
+                 filename,  # type: str
+                 ):
+        # type: (...) -> None
 
-    def __exit__(self, exc_type, exc_value, tracback):
-        # type: (Optional[Any], Optional[Any], Optional[Any]) -> None
-        self.flush()
-        self.close()
+        self.header_present = False
+        self.tsresol = 1000000
+        # A dict to keep if_name to IDB id mapping.
+        # unknown if_name(None) id=0
+        self.interfaces2id: Dict[Optional[bytes], int] = {None: 0}
 
+        # tcpdump only support little-endian in PCAPng files
+        self.endian = "<"
+        self.endian_magic = b"\x4d\x3c\x2b\x1a"
 
-class PcapWriter(RawPcapWriter):
-    """A stream PCAP writer with more control than wrpcap()"""
+        self.filename = filename
+        self.f = open(filename, "wb", 4096)
 
-    def write_header(self, pkt):
+    def _get_time(self,
+                  packet,  # type: Union[bytes, Packet]
+                  sec,  # type: Optional[float]
+                  usec  # type: Optional[int]
+                  ):
+        # type: (...) -> Tuple[float, int]
+        if hasattr(packet, "time"):
+            if sec is None:
+                sec = float(packet.time)
+
+        if usec is None:
+            usec = 0
+
+        return sec, usec  # type: ignore
+
+    def _add_padding(self, raw_data):
+        # type: (bytes) -> bytes
+        raw_data += ((-len(raw_data)) % 4) * b"\x00"
+        return raw_data
+
+    def build_block(self, block_type, block_body, options=None):
+        # type: (bytes, bytes, Optional[bytes]) -> bytes
+
+        # Pad Block Body to 32 bits
+        block_body = self._add_padding(block_body)
+
+        if options:
+            block_body += options
+
+        # An empty block is 12 bytes long
+        block_total_length = 12 + len(block_body)
+
+        # Block Type
+        block = block_type
+        # Block Total Length$
+        block += struct.pack(self.endian + "I", block_total_length)
+        # Block Body
+        block += block_body
+        # Block Total Length$
+        block += struct.pack(self.endian + "I", block_total_length)
+
+        return block
+
+    def _write_header(self, pkt):
         # type: (Optional[Union[Packet, bytes]]) -> None
-        if self.linktype is None:
-            try:
-                if pkt is None or isinstance(pkt, bytes):
-                    # Can't guess LL
-                    raise KeyError
-                self.linktype = conf.l2types.layer2num[
-                    pkt.__class__
-                ]
-            except KeyError:
-                warning("PcapWriter: unknown LL type for %s. Using type 1 (Ethernet)", pkt.__class__.__name__)  # noqa: E501
-                self.linktype = DLT_EN10MB
-        self._write_header(pkt)
+        if not self.header_present:
+            self.header_present = True
+            self._write_block_shb()
+            self._write_block_idb(linktype=self.linktype)
 
-    def write_packet(self,
-                     packet,  # type: Union[bytes, Packet]
-                     sec=None,  # type: Optional[int]
-                     usec=None,  # type: Optional[int]
-                     caplen=None,  # type: Optional[int]
-                     wirelen=None,  # type: Optional[int]
-                     ):
+    def _write_block_shb(self):
+        # type: () -> None
+
+        # Block Type
+        block_type = b"\x0A\x0D\x0D\x0A"
+        # Byte-Order Magic
+        block_shb = self.endian_magic
+        # Major Version
+        block_shb += struct.pack(self.endian + "H", 1)
+        # Minor Version
+        block_shb += struct.pack(self.endian + "H", 0)
+        # Section Length
+        block_shb += struct.pack(self.endian + "q", -1)
+
+        self.f.write(self.build_block(block_type, block_shb))
+
+    def _write_block_idb(self,
+                         linktype,  # type: int
+                         ifname=None  # type: Optional[bytes]
+                         ):
+        # type: (...) -> None
+
+        # Block Type
+        block_type = struct.pack(self.endian + "I", 1)
+        # LinkType
+        block_idb = struct.pack(self.endian + "H", linktype)
+        # Reserved
+        block_idb += struct.pack(self.endian + "H", 0)
+        # SnapLen
+        block_idb += struct.pack(self.endian + "I", 262144)
+
+        # if_name option
+        opts = None
+        if ifname is not None:
+            opts = struct.pack(self.endian + "HH", 2, len(ifname))
+            # Pad Option Value to 32 bits
+            opts += self._add_padding(ifname)
+            opts += struct.pack(self.endian + "HH", 0, 0)
+
+        self.f.write(self.build_block(block_type, block_idb, options=opts))
+
+    def _write_block_spb(self, raw_pkt):
+        # type: (bytes) -> None
+
+        # Block Type
+        block_type = struct.pack(self.endian + "I", 3)
+        # Original Packet Length
+        block_spb = struct.pack(self.endian + "I", len(raw_pkt))
+        # Packet Data
+        block_spb += raw_pkt
+
+        self.f.write(self.build_block(block_type, block_spb))
+
+    def _write_block_epb(self,
+                         raw_pkt,  # type: bytes
+                         ifid,  # type: int
+                         timestamp=None,  # type: Optional[Union[EDecimal, float]]  # noqa: E501
+                         caplen=None,  # type: Optional[int]
+                         orglen=None,  # type: Optional[int]
+                         comment=None,  # type: Optional[bytes]
+                         flags=None,  # type: Optional[int]
+                         ):
+        # type: (...) -> None
+
+        if timestamp:
+            tmp_ts = int(timestamp * self.tsresol)
+            ts_high = tmp_ts >> 32
+            ts_low = tmp_ts & 0xFFFFFFFF
+        else:
+            ts_high = ts_low = 0
+
+        if not caplen:
+            caplen = len(raw_pkt)
+
+        if not orglen:
+            orglen = len(raw_pkt)
+
+        # Block Type
+        block_type = struct.pack(self.endian + "I", 6)
+        # Interface ID
+        block_epb = struct.pack(self.endian + "I", ifid)
+        # Timestamp (High)
+        block_epb += struct.pack(self.endian + "I", ts_high)
+        # Timestamp (Low)
+        block_epb += struct.pack(self.endian + "I", ts_low)
+        # Captured Packet Length
+        block_epb += struct.pack(self.endian + "I", caplen)
+        # Original Packet Length
+        block_epb += struct.pack(self.endian + "I", orglen)
+        # Packet Data
+        block_epb += raw_pkt
+
+        # Options
+        opts = b''
+        if comment is not None:
+            comment = bytes_encode(comment)
+            opts += struct.pack(self.endian + "HH", 1, len(comment))
+            # Pad Option Value to 32 bits
+            opts += self._add_padding(comment)
+        if type(flags) == int:
+            opts += struct.pack(self.endian + "HH", 2, 4)
+            opts += struct.pack(self.endian + "I", flags)
+        if opts:
+            opts += struct.pack(self.endian + "HH", 0, 0)
+
+        self.f.write(self.build_block(block_type, block_epb,
+                                      options=opts))
+
+    def _write_packet(self,  # type: ignore
+                      packet,  # type: bytes
+                      linktype,  # type: int
+                      sec=None,  # type: Optional[float]
+                      usec=None,  # type: Optional[int]
+                      caplen=None,  # type: Optional[int]
+                      wirelen=None,  # type: Optional[int]
+                      comment=None,  # type: Optional[bytes]
+                      ifname=None,  # type: Optional[bytes]
+                      direction=None,  # type: Optional[int]
+                      ):
         # type: (...) -> None
         """
         Writes a single packet to the pcap file.
 
-        :param packet: Packet, or bytes for a single packet
-        :type packet: scapy.packet.Packet or bytes
+        :param packet: bytes for a single packet
+        :type packet: bytes
+        :param linktype: linktype value associated with the packet
+        :type linktype: int
         :param sec: time the packet was captured, in seconds since epoch. If
                     not supplied, defaults to now.
-        :type sec: int or long
-        :param usec: If ``nano=True``, then number of nanoseconds after the
-                     second that the packet was captured. If ``nano=False``,
-                     then the number of microseconds after the second the
-                     packet was captured. If ``sec`` is not specified,
-                     this value is ignored.
-        :type usec: int or long
+        :type sec: float
         :param caplen: The length of the packet in the capture file. If not
-                       specified, uses ``len(raw(packet))``.
+                       specified, uses ``len(packet)``.
         :type caplen: int
         :param wirelen: The length of the packet on the wire. If not
-                        specified, tries ``packet.wirelen``, otherwise uses
-                        ``caplen``.
+                        specified, uses ``caplen``.
         :type wirelen: int
+        :param comment: UTF-8 string containing human-readable comment text
+                        that is associated to the current block. Line separators
+                        SHOULD be a carriage-return + linefeed ('\r\n') or
+                        just linefeed ('\n'); either form may appear and
+                        be considered a line separator. The string is not
+                        zero-terminated.
+        :type bytes
+        :param ifname: UTF-8 string containing the
+                       name of the device used to capture data.
+                       The string is not zero-terminated.
+        :type bytes
+        :param direction:  0 = information not available,
+                           1 = inbound,
+                           2 = outbound
+        :type int
         :return: None
         :rtype: None
         """
-        if hasattr(packet, "time"):
-            if sec is None:
-                sec = int(packet.time)  # type: ignore
-                usec = int(round((packet.time - sec) *  # type: ignore
-                                 (1000000000 if self.nano else 1000000)))
-        if usec is None:
-            usec = 0
-
-        rawpkt = bytes_encode(packet)
-        caplen = len(rawpkt) if caplen is None else caplen
-
-        if wirelen is None:
-            if hasattr(packet, "wirelen"):
-                wirelen = packet.wirelen  # type: ignore
+        if caplen is None:
+            caplen = len(packet)
         if wirelen is None:
             wirelen = caplen
 
-        self._write_packet(
-            rawpkt,
-            sec=sec, usec=usec,
-            caplen=caplen, wirelen=wirelen
-        )
+        ifid = self.interfaces2id.get(ifname, None)
+        if ifid is None:
+            ifid = max(self.interfaces2id.values()) + 1
+            self.interfaces2id[ifname] = ifid
+            self._write_block_idb(linktype=linktype, ifname=ifname)
+
+        # EPB flags (32 bits).
+        # currently only direction is implemented (least 2 significant bits)
+        if type(direction) == int:
+            flags = direction & 0x3
+        else:
+            flags = None
+
+        self._write_block_epb(packet, timestamp=sec, caplen=caplen,
+                              orglen=wirelen, comment=comment, ifid=ifid, flags=flags)
+        if self.sync:
+            self.f.flush()
+
+
+class PcapWriter(RawPcapWriter):
+    """A stream PCAP writer with more control than wrpcap()"""
+    pass
+
+
+class PcapNgWriter(RawPcapNgWriter):
+    """A stream pcapng writer with more control than wrpcapng()"""
+
+    def _get_time(self,
+                  packet,  # type: Union[bytes, Packet]
+                  sec,  # type: Optional[float]
+                  usec  # type: Optional[int]
+                  ):
+        # type: (...) -> Tuple[float, int]
+        if hasattr(packet, "time"):
+            if sec is None:
+                sec = float(packet.time)
+
+        if usec is None:
+            usec = 0
+
+        return sec, usec  # type: ignore
+
+
+@conf.commands.register
+def rderf(filename, count=-1):
+    # type: (Union[IO[bytes], str], int) -> PacketList
+    """Read a ERF file and return a packet list
+
+    :param count: read only <count> packets
+    """
+    with ERFEthernetReader(filename) as fdesc:
+        return fdesc.read_all(count=count)
+
+
+class ERFEthernetReader_metaclass(PcapReader_metaclass):
+    def __call__(cls, filename):
+        # type: (Union[IO[bytes], str]) -> Any
+        i = cls.__new__(cls, cls.__name__, cls.__bases__, cls.__dict__)  # type: ignore
+        filename, fdesc = cls.open(filename)
+        try:
+            i.__init__(filename, fdesc)
+            return i
+        except (Scapy_Exception, EOFError):
+            pass
+
+        if "alternative" in cls.__dict__:
+            cls = cls.__dict__["alternative"]
+            i = cls.__new__(
+                cls,
+                cls.__name__,
+                cls.__bases__,
+                cls.__dict__  # type: ignore
+            )
+            try:
+                i.__init__(filename, fdesc)
+                return i
+            except (Scapy_Exception, EOFError):
+                pass
+
+        raise Scapy_Exception("Not a supported capture file")
+
+    @staticmethod
+    def open(fname  # type: ignore
+             ):
+        # type: (...) -> Tuple[str, _ByteStream]
+        """Open (if necessary) filename"""
+        if isinstance(fname, str):
+            filename = fname
+            try:
+                with gzip.open(filename, "rb") as tmp:
+                    tmp.read(1)
+                fdesc = gzip.open(filename, "rb")  # type: _ByteStream
+            except IOError:
+                fdesc = open(filename, "rb")
+
+        else:
+            fdesc = fname
+            filename = getattr(fdesc, "name", "No name")
+        return filename, fdesc
+
+
+class ERFEthernetReader(PcapReader,
+                        metaclass=ERFEthernetReader_metaclass):
+
+    def __init__(self, filename, fdesc=None):  # type: ignore
+        # type: (Union[IO[bytes], str], IO[bytes]) -> None
+        self.filename = filename  # type: ignore
+        self.f = fdesc
+        self.power = Decimal(10) ** Decimal(-9)
+
+    # time is in 64-bits Endace's format which can be see here:
+    # https://www.endace.com/erf-extensible-record-format-types.pdf
+    def _convert_erf_timestamp(self, t):
+        # type: (int) -> EDecimal
+        sec = t >> 32
+        frac_sec = t & 0xffffffff
+        frac_sec *= 10**9
+        frac_sec += (frac_sec & 0x80000000) << 1
+        frac_sec >>= 32
+        return EDecimal(sec + self.power * frac_sec)
+
+    # The details of ERF Packet format can be see here:
+    # https://www.endace.com/erf-extensible-record-format-types.pdf
+    def read_packet(self, size=MTU, **kwargs):
+        # type: (int, **Any) -> Packet
+
+        # General ERF Header have exactly 16 bytes
+        hdr = self.f.read(16)
+        if len(hdr) < 16:
+            raise EOFError
+
+        # The timestamp is in little-endian byte-order.
+        time = struct.unpack('<Q', hdr[:8])[0]
+        # The rest is in big-endian byte-order.
+        # Ignoring flags and lctr (loss counter) since they are ERF specific
+        # header fields which Packet object does not support.
+        type, _, rlen, _, wlen = struct.unpack('>BBHHH', hdr[8:])
+        # Check if the type != 0x02, type Ethernet
+        if type & 0x02 == 0:
+            raise Scapy_Exception("Invalid ERF Type (Not TYPE_ETH)")
+
+        # If there are extended headers, ignore it because Packet object does
+        # not support it. Extended headers size is 8 bytes before the payload.
+        if type & 0x80:
+            _ = self.f.read(8)
+            s = self.f.read(rlen - 24)
+        else:
+            s = self.f.read(rlen - 16)
+
+        # Ethernet has 2 bytes of padding containing `offset` and `pad`. Both
+        # of the fields are disregarded by Endace.
+        pb = s[2:size]
+        from scapy.layers.l2 import Ether
+        try:
+            p = Ether(pb, **kwargs)  # type: Packet
+        except KeyboardInterrupt:
+            raise
+        except Exception:
+            if conf.debug_dissector:
+                from scapy.sendrecv import debug
+                debug.crashed_on = (Ether, s)
+                raise
+            if conf.raw_layer is None:
+                # conf.raw_layer is set on import
+                import scapy.packet  # noqa: F401
+            p = conf.raw_layer(s)
+
+        p.time = self._convert_erf_timestamp(time)
+        p.wirelen = wlen
+
+        return p
+
+
+@conf.commands.register
+def wrerf(filename,  # type: Union[IO[bytes], str]
+          pkt,  # type: _PacketIterable
+          *args,  # type: Any
+          **kargs  # type: Any
+          ):
+    # type: (...) -> None
+    """Write a list of packets to a ERF file
+
+    :param filename: the name of the file to write packets to, or an open,
+        writable file-like object. The file descriptor will be
+        closed at the end of the call, so do not use an object you
+        do not want to close (e.g., running wrerf(sys.stdout, [])
+        in interactive mode will crash Scapy).
+    :param gz: set to 1 to save a gzipped capture
+    :param append: append packets to the capture file instead of
+        truncating it
+    :param sync: do not bufferize writes to the capture file
+    """
+    with ERFEthernetWriter(filename, *args, **kargs) as fdesc:
+        fdesc.write(pkt)
+
+
+class ERFEthernetWriter(PcapWriter):
+    """A stream ERF Ethernet writer with more control than wrerf()"""
+
+    def __init__(self,
+                 filename,  # type: Union[IO[bytes], str]
+                 gz=False,  # type: bool
+                 append=False,  # type: bool
+                 sync=False,  # type: bool
+                 ):
+        # type: (...) -> None
+        """
+        :param filename: the name of the file to write packets to, or an open,
+            writable file-like object.
+        :param gz: compress the capture on the fly
+        :param append: append packets to the capture file instead of
+            truncating it
+        :param sync: do not bufferize writes to the capture file
+        """
+        super(ERFEthernetWriter, self).__init__(filename,
+                                                gz=gz,
+                                                append=append,
+                                                sync=sync)
+
+    def write(self, pkt):  # type: ignore
+        # type: (_PacketIterable) -> None
+        """
+        Writes a Packet, a SndRcvList object, or bytes to a ERF file.
+
+        :param pkt: Packet(s) to write (one record for each Packet)
+        :type pkt: iterable[scapy.packet.Packet], scapy.packet.Packet
+        """
+        # Import here to avoid circular dependency
+        from scapy.supersocket import IterSocket
+        for p in IterSocket(pkt).iter:
+            self.write_packet(p)
+
+    def write_packet(self, pkt):  # type: ignore
+        # type: (Packet) -> None
+
+        if hasattr(pkt, "time"):
+            sec = int(pkt.time)
+            usec = int((int(round((pkt.time - sec) * 10**9)) << 32) / 10**9)
+            t = (sec << 32) + usec
+        else:
+            t = int(time.time()) << 32
+
+        # There are 16 bytes of headers + 2 bytes of padding before the packets
+        # payload.
+        rlen = len(pkt) + 18
+
+        if hasattr(pkt, "wirelen"):
+            wirelen = pkt.wirelen
+        if wirelen is None:
+            wirelen = rlen
+
+        self.f.write(struct.pack("<Q", t))
+        self.f.write(struct.pack(">BBHHHH", 2, 0, rlen, 0, wirelen, 0))
+        self.f.write(bytes(pkt))
+        self.f.flush()
+
+    def close(self):
+        # type: () -> Optional[Any]
+        return self.f.close()
 
 
 @conf.commands.register
@@ -1939,7 +2738,7 @@ def import_hexcap(input_string=None):
     p = ""
     try:
         if input_string:
-            input_function = six.StringIO(input_string).readline
+            input_function = StringIO(input_string).readline
         else:
             input_function = input
         while True:
@@ -2115,7 +2914,7 @@ def tcpdump(
                 "tcpdump is not available"
             )
         prog = [conf.prog.tcpdump]
-    elif isinstance(prog, six.string_types):
+    elif isinstance(prog, str):
         prog = [prog]
     else:
         raise ValueError("prog must be a string")
@@ -2154,7 +2953,19 @@ def tcpdump(
         if linktype is None and isinstance(pktlist, str):
             # linktype is unknown but required. Read it from file
             with PcapReader(pktlist) as rd:
-                linktype = rd.linktype
+                if isinstance(rd, PcapNgReader):
+                    # Get the linktype from the first packet
+                    try:
+                        _, metadata = rd._read_packet()
+                        linktype = metadata.linktype
+                        if OPENBSD and linktype == 228:
+                            linktype = DLT_RAW
+                    except EOFError:
+                        raise ValueError(
+                            "Cannot get linktype from a PcapNg packet."
+                        )
+                else:
+                    linktype = rd.linktype
         from scapy.arch.common import compile_filter
         compile_filter(flt, linktype=linktype)
         args.append(flt)
@@ -2189,7 +3000,7 @@ def tcpdump(
                 stdout=stdout,
                 stderr=stderr,
             )
-    elif isinstance(pktlist, six.string_types):
+    elif isinstance(pktlist, str):
         # file
         with ContextManagerSubprocess(prog[0], suppress=_suppress):
             proc = subprocess.Popen(
@@ -2198,7 +3009,6 @@ def tcpdump(
                 stderr=stderr,
             )
     elif use_tempfile:
-        pktlist = cast(Union[IO[bytes], "_PacketIterable"], pktlist)
         tmpfile = get_temp_file(  # type: ignore
             autoext=".pcap",
             fd=True
@@ -2289,17 +3099,12 @@ def get_terminal_width():
     Notice: this will try several methods in order to
     support as many terminals and OS as possible.
     """
-    # Let's first try using the official API
-    # (Python 3.3+)
-    sizex = None  # type: Optional[int]
-    if not six.PY2:
-        import shutil
-        sizex = shutil.get_terminal_size(fallback=(0, 0))[0]
-        if sizex != 0:
-            return sizex
-    # Backups / Python 2.7
+    sizex = shutil.get_terminal_size(fallback=(0, 0))[0]
+    if sizex != 0:
+        return sizex
+    # Backups
     if WINDOWS:
-        from ctypes import windll, create_string_buffer  # type: ignore
+        from ctypes import windll, create_string_buffer
         # http://code.activestate.com/recipes/440694-determine-size-of-console-window-on-windows/
         h = windll.kernel32.GetStdHandle(-12)
         csbi = create_string_buffer(22)
@@ -2311,30 +3116,30 @@ def get_terminal_width():
             # sizey = bottom - top + 1
             return sizex
         return sizex
-    else:
-        # We have various methods
-        # COLUMNS is set on some terminals
-        try:
-            sizex = int(os.environ['COLUMNS'])
-        except Exception:
-            pass
-        if sizex:
-            return sizex
-        # We can query TIOCGWINSZ
-        try:
-            import fcntl
-            import termios
-            s = struct.pack('HHHH', 0, 0, 0, 0)
-            x = fcntl.ioctl(1, termios.TIOCGWINSZ, s)
-            sizex = struct.unpack('HHHH', x)[1]
-        except IOError:
-            pass
+    # We have various methods
+    # COLUMNS is set on some terminals
+    try:
+        sizex = int(os.environ['COLUMNS'])
+    except Exception:
+        pass
+    if sizex:
         return sizex
+    # We can query TIOCGWINSZ
+    try:
+        import fcntl
+        import termios
+        s = struct.pack('HHHH', 0, 0, 0, 0)
+        x = fcntl.ioctl(1, termios.TIOCGWINSZ, s)
+        sizex = struct.unpack('HHHH', x)[1]
+    except (IOError, ModuleNotFoundError):
+        # If everything failed, return default terminal size
+        sizex = 79
+    return sizex
 
 
 def pretty_list(rtlst,  # type: List[Tuple[Union[str, List[str]], ...]]
                 header,  # type: List[Tuple[str, ...]]
-                sortBy=0,  # type: int
+                sortBy=0,  # type: Optional[int]
                 borders=False,  # type: bool
                 ):
     # type: (...) -> str
@@ -2355,8 +3160,9 @@ def pretty_list(rtlst,  # type: List[Tuple[Union[str, List[str]], ...]]
     # Windows has a fat terminal border
     _spacelen = len(_space) * (cols - 1) + int(WINDOWS)
     _croped = False
-    # Sort correctly
-    rtlst.sort(key=lambda x: x[sortBy])
+    if sortBy is not None:
+        # Sort correctly
+        rtlst.sort(key=lambda x: x[sortBy])
     # Resolve multi-values
     for i, line in enumerate(rtlst):
         ids = []  # type: List[int]
@@ -2413,6 +3219,20 @@ def pretty_list(rtlst,  # type: List[Tuple[Union[str, List[str]], ...]]
     return "\n".join(fmt % x for x in rtslst)
 
 
+def human_size(x, fmt=".1f"):
+    # type: (int, str) -> str
+    """
+    Convert a size in octets to a human string representation
+    """
+    units = ['K', 'M', 'G', 'T', 'P', 'E']
+    if not x:
+        return "0B"
+    i = int(math.log(x, 2**10))
+    if i and i < len(units):
+        return format(x / 2**(10 * i), fmt) + units[i - 1]
+    return str(x) + "B"
+
+
 def __make_table(
     yfmtfunc,  # type: Callable[[int], str]
     fmtfunc,  # type: Callable[[int], str]
@@ -2430,9 +3250,6 @@ def __make_table(
     vy = {}  # type: Dict[str, Optional[int]]
     vz = {}  # type: Dict[Tuple[str, str], str]
     vxf = {}  # type: Dict[str, str]
-
-    # Python 2 backward compatibility
-    fxyz = lambda_tuple_converter(fxyz)
 
     tmp_len = 0
     for e in data:
@@ -2567,14 +3384,397 @@ def whois(ip_address):
             break
     return b"\n".join(lines[3:])
 
+####################
+#     CLI utils    #
+####################
+
+
+class CLIUtil:
+    """
+    Provides a Util class to easily create simple CLI tools in Scapy,
+    that can still be used as an API.
+
+    Doc:
+        - override the ps1() function
+        - register commands with the @CLIUtil.addcomment decorator
+        - call the loop() function when ready
+    """
+
+    def _depcheck(self) -> None:
+        """
+        Check that all dependencies are installed
+        """
+        try:
+            import prompt_toolkit  # noqa: F401
+        except ImportError:
+            # okay we lie but prompt_toolkit is a dependency...
+            raise ImportError("You need to have IPython installed to use the CLI")
+
+    # Okay let's do nice code
+    commands: Dict[str, Callable[..., Any]] = {}
+    # print output of command
+    commands_output: Dict[str, Callable[..., str]] = {}
+    # provides completion to command
+    commands_complete: Dict[str, Callable[..., List[str]]] = {}
+
+    @staticmethod
+    def _inspectkwargs(func: DecoratorCallable) -> None:
+        """
+        Internal function to parse arguments from the kwargs of the functions
+        """
+        func._flagnames = [  # type: ignore
+            x.name for x in
+            inspect.signature(func).parameters.values()
+            if x.kind == inspect.Parameter.KEYWORD_ONLY
+        ]
+        func._flags = [  # type: ignore
+            ("-%s" % x) if len(x) == 1 else ("--%s" % x)
+            for x in func._flagnames  # type: ignore
+        ]
+
+    @staticmethod
+    def _parsekwargs(
+        func: DecoratorCallable,
+        args: List[str]
+    ) -> Tuple[List[str], Dict[str, Literal[True]]]:
+        """
+        Internal function to parse CLI arguments of a function.
+        """
+        kwargs: Dict[str, Literal[True]] = {}
+        if func._flags:  # type: ignore
+            i = 0
+            for arg in args:
+                if arg in func._flags:  # type: ignore
+                    i += 1
+                    kwargs[func._flagnames[func._flags.index(arg)]] = True  # type: ignore  # noqa: E501
+                    continue
+                break
+            args = args[i:]
+        return args, kwargs
+
+    @classmethod
+    def _parseallargs(
+        cls,
+        func: DecoratorCallable,
+        cmd: str, args: List[str]
+    ) -> Tuple[List[str], Dict[str, Literal[True]], Dict[str, Literal[True]]]:
+        """
+        Internal function to parse CLI arguments of both the function
+        and its output function.
+        """
+        args, kwargs = cls._parsekwargs(func, args)
+        outkwargs: Dict[str, Literal[True]] = {}
+        if cmd in cls.commands_output:
+            args, outkwargs = cls._parsekwargs(cls.commands_output[cmd], args)
+        return args, kwargs, outkwargs
+
+    @classmethod
+    def addcommand(
+        cls,
+        spaces: bool = False,
+        globsupport: bool = False,
+    ) -> Callable[[DecoratorCallable], DecoratorCallable]:
+        """
+        Decorator to register a command
+        """
+        def func(cmd: DecoratorCallable) -> DecoratorCallable:
+            cls.commands[cmd.__name__] = cmd
+            cmd._spaces = spaces  # type: ignore
+            cmd._globsupport = globsupport  # type: ignore
+            cls._inspectkwargs(cmd)
+            if cmd._globsupport and not cmd._spaces:  # type: ignore
+                raise ValueError("Cannot use globsupport without spaces.")
+            return cmd
+        return func
+
+    @classmethod
+    def addoutput(cls, cmd: DecoratorCallable) -> Callable[[DecoratorCallable], DecoratorCallable]:  # noqa: E501
+        """
+        Decorator to register a command output processor
+        """
+        def func(processor: DecoratorCallable) -> DecoratorCallable:
+            cls.commands_output[cmd.__name__] = processor
+            cls._inspectkwargs(processor)
+            return processor
+        return func
+
+    @classmethod
+    def addcomplete(cls, cmd: DecoratorCallable) -> Callable[[DecoratorCallable], DecoratorCallable]:  # noqa: E501
+        """
+        Decorator to register a command completor
+        """
+        def func(processor: DecoratorCallable) -> DecoratorCallable:
+            cls.commands_complete[cmd.__name__] = processor
+            return processor
+        return func
+
+    def ps1(self) -> str:
+        """
+        Return the PS1 of the shell
+        """
+        return "> "
+
+    def close(self) -> None:
+        """
+        Function called on exiting
+        """
+        print("Exited")
+
+    def help(self, cmd: Optional[str] = None) -> None:
+        """
+        Return the help related to this CLI util
+        """
+        def _args(func: Any) -> str:
+            flags = func._flags.copy()
+            if func.__name__ in self.commands_output:
+                flags += self.commands_output[func.__name__]._flags  # type: ignore
+            return " %s%s" % (
+                (
+                    "%s " % " ".join("[%s]" % x for x in flags)
+                    if flags else ""
+                ),
+                " ".join(
+                    "<%s%s>" % (
+                        x.name,
+                        "?" if
+                        (x.default is None or x.default != inspect.Parameter.empty)
+                        else ""
+                    )
+                    for x in list(inspect.signature(func).parameters.values())[1:]
+                    if x.name not in func._flagnames and x.name[0] != "_"
+                )
+            )
+
+        if cmd:
+            if cmd not in self.commands:
+                print("Unknown command '%s'" % cmd)
+                return
+            # help for one command
+            func = self.commands[cmd]
+            print("%s%s: %s" % (
+                cmd,
+                _args(func),
+                func.__doc__ and func.__doc__.strip()
+            ))
+        else:
+            header = "│ %s - Help │" % self.__class__.__name__
+            print("┌" + "─" * (len(header) - 2) + "┐")
+            print(header)
+            print("└" + "─" * (len(header) - 2) + "┘")
+            print(
+                pretty_list(
+                    [
+                        (
+                            cmd,
+                            _args(func),
+                            func.__doc__ and func.__doc__.strip().split("\n")[0] or ""
+                        )
+                        for cmd, func in self.commands.items()
+                    ],
+                    [("Command", "Arguments", "Description")]
+                )
+            )
+
+    def _completer(self) -> 'prompt_toolkit.completion.Completer':
+        """
+        Returns a prompt_toolkit custom completer
+        """
+        from prompt_toolkit.completion import Completer, Completion
+
+        class CLICompleter(Completer):
+            def get_completions(cmpl, document, complete_event):  # type: ignore
+                if not complete_event.completion_requested:
+                    # Only activate when the user does <TAB>
+                    return
+                parts = document.text.split(" ")
+                cmd = parts[0].lower()
+                if cmd not in self.commands:
+                    # We are trying to complete the command
+                    for possible_cmd in (x for x in self.commands if x.startswith(cmd)):
+                        yield Completion(possible_cmd, start_position=-len(cmd))
+                else:
+                    # We are trying to complete the command content
+                    if len(parts) == 1:
+                        return
+                    args, _, _ = self._parseallargs(self.commands[cmd], cmd, parts[1:])
+                    arg = " ".join(args)
+                    if cmd in self.commands_complete:
+                        for possible_arg in self.commands_complete[cmd](self, arg):
+                            yield Completion(possible_arg, start_position=-len(arg))
+                return
+        return CLICompleter()
+
+    def loop(self, debug: int = 0) -> None:
+        """
+        Main command handling loop
+        """
+        from prompt_toolkit import PromptSession
+        session = PromptSession(completer=self._completer())
+
+        while True:
+            try:
+                cmd = session.prompt(self.ps1()).strip()
+            except KeyboardInterrupt:
+                continue
+            except EOFError:
+                self.close()
+                break
+            args = cmd.split(" ")[1:]
+            cmd = cmd.split(" ")[0].strip().lower()
+            if not cmd:
+                continue
+            if cmd in ["help", "h", "?"]:
+                self.help(" ".join(args))
+                continue
+            if cmd in "exit":
+                break
+            if cmd not in self.commands:
+                print("Unknown command. Type help or ?")
+            else:
+                # check the number of arguments
+                func = self.commands[cmd]
+                args, kwargs, outkwargs = self._parseallargs(func, cmd, args)
+                if func._spaces:  # type: ignore
+                    args = [" ".join(args)]
+                    # if globsupport is set, we might need to do several calls
+                    if func._globsupport and "*" in args[0]:  # type: ignore
+                        if args[0].count("*") > 1:
+                            print("More than 1 glob star (*) is currently unsupported.")
+                            continue
+                        before, after = args[0].split("*", 1)
+                        reg = re.compile(re.escape(before) + r".*" + after)
+                        calls = [
+                            [x] for x in
+                            self.commands_complete[cmd](self, before)
+                            if reg.match(x)
+                        ]
+                    else:
+                        calls = [args]
+                else:
+                    calls = [args]
+                # now iterate if required, call the function and print its output
+                res = None
+                for args in calls:
+                    try:
+                        res = func(self, *args, **kwargs)
+                    except TypeError:
+                        print("Bad number of arguments !")
+                        self.help(cmd=cmd)
+                        continue
+                    except Exception as ex:
+                        print("Command failed with error: %s" % ex)
+                        if debug:
+                            traceback.print_exception(ex)
+                    try:
+                        if res and cmd in self.commands_output:
+                            self.commands_output[cmd](self, res, **outkwargs)
+                    except Exception as ex:
+                        print("Output processor failed with error: %s" % ex)
+
+
+def AutoArgparse(func: DecoratorCallable) -> None:
+    """
+    Generate an Argparse call from a function, then call this function.
+
+    Notes:
+
+    - for the arguments to have a description, the sphinx docstring format
+      must be used. See
+      https://sphinx-rtd-tutorial.readthedocs.io/en/latest/docstrings.html
+    - the arguments must be typed in Python (we ignore Sphinx-specific types)
+      untyped arguments are ignored.
+    - only types that would be supported by argparse are supported. The others
+      are omitted.
+    """
+    argsdoc = {}
+    if func.__doc__:
+        # Sphinx doc format parser
+        m = re.match(
+            r"((?:.|\n)*?)(\n\s*:(?:param|type|raises|return|rtype)(?:.|\n)*)",
+            func.__doc__.strip(),
+        )
+        if not m:
+            desc = func.__doc__.strip()
+        else:
+            desc = m.group(1)
+            sphinxargs = re.findall(
+                r"\s*:(param|type|raises|return|rtype)\s*([^:]*):(.*)",
+                m.group(2),
+            )
+            for argtype, argparam, argdesc in sphinxargs:
+                argparam = argparam.strip()
+                argdesc = argdesc.strip()
+                if argtype == "param":
+                    if not argparam:
+                        raise ValueError(":param: without a name !")
+                    argsdoc[argparam] = argdesc
+    else:
+        desc = ""
+    # Now build the argparse.ArgumentParser
+    parser = argparse.ArgumentParser(
+        prog=func.__name__,
+        description=desc,
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    # Process the parameters
+    positional = []
+    for param in inspect.signature(func).parameters.values():
+        if not param.annotation:
+            continue
+        parname = param.name
+        paramkwargs = {}
+        if param.annotation is bool:
+            if param.default is True:
+                parname = "no-" + parname
+                paramkwargs["action"] = "store_false"
+            else:
+                paramkwargs["action"] = "store_true"
+        elif param.annotation in [str, int, float]:
+            paramkwargs["type"] = param.annotation
+        else:
+            continue
+        if param.default != inspect.Parameter.empty:
+            if param.kind == inspect.Parameter.POSITIONAL_ONLY:
+                positional.append(param.name)
+                paramkwargs["nargs"] = '?'
+            else:
+                parname = "--" + parname
+            paramkwargs["default"] = param.default
+        else:
+            positional.append(param.name)
+        if param.kind == inspect.Parameter.VAR_POSITIONAL:
+            paramkwargs["action"] = "append"
+        if param.name in argsdoc:
+            paramkwargs["help"] = argsdoc[param.name]
+        parser.add_argument(parname, **paramkwargs)  # type: ignore
+    # Now parse the sys.argv parameters
+    params = vars(parser.parse_args())
+    # Act as in interactive mode
+    conf.logLevel = 20
+    from scapy.themes import DefaultTheme
+    conf.color_theme = DefaultTheme()
+    # And call the function
+    try:
+        func(
+            *[params.pop(x) for x in positional],
+            **{
+                (k[3:] if k.startswith("no_") else k): v
+                for k, v in params.items()
+            }
+        )
+    except AssertionError as ex:
+        print("ERROR: " + str(ex))
+        parser.print_help()
+
+
 #######################
 #   PERIODIC SENDER   #
 #######################
 
 
 class PeriodicSenderThread(threading.Thread):
-    def __init__(self, sock, pkt, interval=0.5):
-        # type: (Any, _PacketIterable, float) -> None
+    def __init__(self, sock, pkt, interval=0.5, ignore_exceptions=True):
+        # type: (Any, _PacketIterable, float, bool) -> None
         """ Thread to send packets periodically
 
         Args:
@@ -2588,15 +3788,33 @@ class PeriodicSenderThread(threading.Thread):
             self._pkts = pkt
         self._socket = sock
         self._stopped = threading.Event()
+        self._enabled = threading.Event()
+        self._enabled.set()
         self._interval = interval
+        self._ignore_exceptions = ignore_exceptions
         threading.Thread.__init__(self)
+
+    def enable(self):
+        # type: () -> None
+        self._enabled.set()
+
+    def disable(self):
+        # type: () -> None
+        self._enabled.clear()
 
     def run(self):
         # type: () -> None
         while not self._stopped.is_set() and not self._socket.closed:
             for p in self._pkts:
-                self._socket.send(p)
-                time.sleep(self._interval)
+                try:
+                    if self._enabled.is_set():
+                        self._socket.send(p)
+                except (OSError, TimeoutError) as e:
+                    if self._ignore_exceptions:
+                        return
+                    else:
+                        raise e
+                self._stopped.wait(timeout=self._interval)
                 if self._stopped.is_set() or self._socket.closed:
                     break
 

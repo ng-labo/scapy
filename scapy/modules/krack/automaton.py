@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# This file is part of Scapy
+# See https://scapy.net/ for more information
+
 import hmac
 import hashlib
 from itertools import count
@@ -718,7 +722,7 @@ class KrackAP(Automaton):
             self.last_iv = iv
         else:
             if iv <= self.last_iv:
-                log_runtime.warning("IV re-use!! Client seems to be "
+                log_runtime.warning("IV reuse!! Client seems to be "
                                     "vulnerable to handshake 3/4 replay "
                                     "(CVE-2017-13077)"
                                     )

@@ -1,17 +1,20 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
-
 # Copyright (C) 2014 Maxence Tury <maxence.tury@ssi.gouv.fr>
-# OpenFlow is an open standard used in SDN deployments.
-# Based on OpenFlow v1.3.4
-# Specifications can be retrieved from https://www.opennetworking.org/
+
+"""
+OpenFlow v1.3.4
+
+OpenFlow is an open standard used in SDN deployments.
+Specifications can be retrieved from https://www.opennetworking.org/
+"""
+
 
 # scapy.contrib.description = OpenFlow v1.3
 # scapy.contrib.status = loads
 
-from __future__ import absolute_import
 import copy
 import struct
 
@@ -25,7 +28,6 @@ from scapy.fields import BitEnumField, BitField, ByteEnumField, ByteField, \
     XIntField, XShortField, PacketLenField
 from scapy.layers.l2 import Ether
 from scapy.packet import Packet, Padding, Raw
-import scapy.modules.six as six
 
 from scapy.contrib.openflow import _ofp_header, _ofp_header_item, \
     OFPacketField, OpenFlow, _UnknownOpenFlow
@@ -265,7 +267,7 @@ ofp_oxm_fields = {}
 
 
 def add_ofp_oxm_fields(i, org):
-    ofp_oxm_fields[i] = [ShortEnumField("class", "OFPXMC_OPENFLOW_BASIC", ofp_oxm_classes),  # noqa: E501
+    ofp_oxm_fields[i] = [ShortEnumField("class_", "OFPXMC_OPENFLOW_BASIC", ofp_oxm_classes),  # noqa: E501
                          BitEnumField("field", i // 2, 7, ofp_oxm_names),
                          BitField("hasmask", i % 2, 1)]
     ofp_oxm_fields[i].append(ByteField("len", org[2] + org[2] * (i % 2)))
@@ -672,7 +674,7 @@ class MatchField(PacketField):
             if Padding in r:
                 p = r[Padding]
                 i.payload = p
-                del(r.payload)
+                del r.payload
             return r.load, i
         else:
             return b"", i
@@ -2246,7 +2248,7 @@ class OFPFlowStats(_ofp_header_item):
                    LongField("byte_count", 0),
                    MatchField("match"),
                    PacketListField("instructions", [], OFPIT,
-                                   length_from=lambda pkt:pkt.len - 56 - pkt.match.len)]  # noqa: E501
+                                   length_from=lambda pkt:pkt.len - 52 - pkt.match.len)]  # noqa: E501
 
     def extract_padding(self, s):
         return b"", s
@@ -2513,7 +2515,7 @@ class OFPMPRequestGroupFeatures(_ofp_header):
                    XIntField("pad1", 0)]
 
 
-ofp_action_types_flags = [v for v in six.itervalues(ofp_action_types)
+ofp_action_types_flags = [v for v in ofp_action_types.values()
                           if v != 'OFPAT_EXPERIMENTER']
 
 

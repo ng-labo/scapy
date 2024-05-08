@@ -1,7 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Thomas Tannhaeuser <hecke@naberius.de>
-# This program is published under a GPLv2 license
 
 # scapy.contrib.status = skip
 
@@ -29,9 +29,16 @@
 from scapy.contrib.scada.iec104.iec104_fields import \
     IEC60870_5_4_NormalizedFixPoint, IEC104SignedSevenBitValue, \
     LESignedShortField, LEIEEEFloatField
-from scapy.fields import BitEnumField, ByteEnumField, ByteField, \
-    ThreeBytesField, \
-    BitField, LEShortField, LESignedIntField
+from scapy.fields import (
+    BitEnumField,
+    BitField,
+    ByteEnumField,
+    ByteField,
+    LEShortField,
+    LESignedIntField,
+    MayEnd,
+    ThreeBytesField,
+)
 
 
 def _generate_attributes_and_dicts(cls):
@@ -219,7 +226,7 @@ class IEC104_IE_QDP(IEC104_IE_CommonQualityFlags):
         # blocked
         BitEnumField('ei', 0, 1, IEC104_IE_CommonQualityFlags.EI_FLAGS),
         # blocked
-        BitField('reserved', 0, 3)
+        BitField('reserved_qdp', 0, 3)
     ]
 
 
@@ -489,7 +496,7 @@ class IEC104_IE_QOC:
     }
 
     informantion_element_fields = [
-        BitEnumField('s/e', 0, 1, SE_FLAGS),
+        BitEnumField('s_or_e', 0, 1, SE_FLAGS),
         BitEnumField('qu', 0, 5, QU_FLAGS)
     ]
 
@@ -605,7 +612,7 @@ class IEC104_IE_CP56TIME2A(IEC104_IE_CommonQualityFlags):
 
     informantion_element_fields = [
         LEShortField('sec_milli', 0),
-        BitEnumField('iv', 0, 1, IEC104_IE_CommonQualityFlags.IV_FLAGS),
+        BitEnumField('iv_time', 0, 1, IEC104_IE_CommonQualityFlags.IV_FLAGS),
         BitEnumField('gen', 0, 1, GEN_FLAGS),
         # only valid in monitor direction ToDo: special treatment needed?
         BitField('minutes', 0, 6),
@@ -613,7 +620,7 @@ class IEC104_IE_CP56TIME2A(IEC104_IE_CommonQualityFlags):
         BitField('reserved_2', 0, 2),
         BitField('hours', 0, 5),
         BitEnumField('weekday', 0, 3, WEEK_DAY_FLAGS),
-        BitField('day-of-month', 0, 5),
+        MayEnd(BitField('day_of_month', 0, 5)),
         BitField('reserved_3', 0, 4),
         BitField('month', 0, 4),
         BitField('reserved_4', 0, 1),
@@ -630,7 +637,7 @@ class IEC104_IE_CP56TIME2A_START_TIME(IEC104_IE_CP56TIME2A):
     informantion_element_fields = [
         LEShortField('start_sec_milli', 0),
         BitEnumField('start_iv', 0, 1, IEC104_IE_CommonQualityFlags.IV_FLAGS),
-        BitEnumField('start_gen', 0, 1, IEC104_IE_CP56TIME2A.GEN_FLAGS),
+        MayEnd(BitEnumField('start_gen', 0, 1, IEC104_IE_CP56TIME2A.GEN_FLAGS)),
         # only valid in monitor direction ToDo: special treatment needed?
         BitField('start_minutes', 0, 6),
         BitEnumField('start_su', 0, 1, IEC104_IE_CP56TIME2A.SU_FLAGS),
@@ -638,7 +645,7 @@ class IEC104_IE_CP56TIME2A_START_TIME(IEC104_IE_CP56TIME2A):
         BitField('start_hours', 0, 5),
         BitEnumField('start_weekday', 0, 3,
                      IEC104_IE_CP56TIME2A.WEEK_DAY_FLAGS),
-        BitField('start_day-of-month', 0, 5),
+        BitField('start_day_of_month', 0, 5),
         BitField('start_reserved_3', 0, 4),
         BitField('start_month', 0, 4),
         BitField('start_reserved_4', 0, 1),
@@ -655,7 +662,7 @@ class IEC104_IE_CP56TIME2A_STOP_TIME(IEC104_IE_CP56TIME2A):
     informantion_element_fields = [
         LEShortField('stop_sec_milli', 0),
         BitEnumField('stop_iv', 0, 1, IEC104_IE_CommonQualityFlags.IV_FLAGS),
-        BitEnumField('stop_gen', 0, 1, IEC104_IE_CP56TIME2A.GEN_FLAGS),
+        MayEnd(BitEnumField('stop_gen', 0, 1, IEC104_IE_CP56TIME2A.GEN_FLAGS)),
         # only valid in monitor direction ToDo: special treatment needed?
         BitField('stop_minutes', 0, 6),
         BitEnumField('stop_su', 0, 1, IEC104_IE_CP56TIME2A.SU_FLAGS),
@@ -663,7 +670,7 @@ class IEC104_IE_CP56TIME2A_STOP_TIME(IEC104_IE_CP56TIME2A):
         BitField('stop_hours', 0, 5),
         BitEnumField('stop_weekday', 0, 3,
                      IEC104_IE_CP56TIME2A.WEEK_DAY_FLAGS),
-        BitField('stop_day-of-month', 0, 5),
+        BitField('stop_day_of_month', 0, 5),
         BitField('stop_reserved_3', 0, 4),
         BitField('stop_month', 0, 4),
         BitField('stop_reserved_4', 0, 1),
@@ -1327,7 +1334,7 @@ class IEC104_IE_SOF:
 
     informantion_element_fields = [
         BitEnumField('fa', 0, 1, FA_FLAGS),
-        BitEnumField('for', 0, 1, FOR_FLAGS),
+        BitEnumField('for_', 0, 1, FOR_FLAGS),
         BitEnumField('lfd', 0, 1, LFD_FLAGS),
         BitEnumField('status', 0, 5, STATUS_FLAGS)
     ]

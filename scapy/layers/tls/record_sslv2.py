@@ -1,6 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
+# See https://scapy.net/ for more information
 # Copyright (C) 2017 Maxence Tury
-# This program is published under a GPLv2 license
 
 """
 SSLv2 Record.
@@ -140,7 +141,7 @@ class SSLv2(TLS):
         is_mac_ok = self._sslv2_mac_verify(cfrag + pad, mac)
         if not is_mac_ok:
             pkt_info = self.firstlayer().summary()
-            log_runtime.info("TLS: record integrity check failed [%s]", pkt_info)  # noqa: E501
+            log_runtime.info("SSLv2: record integrity check failed [%s]", pkt_info)  # noqa: E501
 
         reconstructed_body = mac + cfrag + pad
         return hdr + reconstructed_body + r
@@ -173,7 +174,7 @@ class SSLv2(TLS):
             except KeyboardInterrupt:
                 raise
             except Exception:
-                if conf.debug_dissect:
+                if conf.debug_dissector:
                     raise
                 p = conf.raw_layer(s, _internal=1, _underlayer=self)
             self.add_payload(p)

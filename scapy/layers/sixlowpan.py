@@ -1,9 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Cesar A. Bernardini <mesarpe@gmail.com>
 #               Intern at INRIA Grand Nancy Est
-# Copyright (C) Gabriel Potter <gabriel@potter.fr>
-# This program is published under a GPLv2 license
+# Copyright (C) Gabriel Potter <gabriel[]potter[]fr>
 """
 6LoWPAN Protocol Stack
 ======================
@@ -58,7 +58,7 @@ from scapy.packet import Packet, bind_layers, bind_top_down
 from scapy.fields import (
     BitEnumField,
     BitField,
-    BitFixedLenField,
+    BitLenField,
     BitScalingField,
     ByteEnumField,
     ByteField,
@@ -282,7 +282,7 @@ class LoWPAN_HC1(Packet):
             lambda pkt: pkt.nh == 1 and pkt.hc2
         ),
         # Out of spec
-        BitFixedLenField("pad", 0, _get_hc1_pad)
+        BitLenField("pad", 0, _get_hc1_pad)
     ]
 
     def post_dissect(self, data):

@@ -1,13 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
+# See https://scapy.net/ for more information
 # Copyright (C) 2007, 2008, 2009 Arnaud Ebalard
 #               2015, 2016, 2017 Maxence Tury
-# This program is published under a GPLv2 license
 
 """
 TLS helpers, provided as out-of-context methods.
 """
 
-from __future__ import absolute_import
 import struct
 
 from scapy.compat import orb, chb

@@ -657,7 +657,7 @@ Creating a CTO message::
     CTORequest() / GetDaqResolutionInfo()
     CTORequest() / GetSeed(mode=0x01, resource=0x00)
 
-To send the message over CAN a header has to be added
+To send the message over CAN a header has to be added::
 
     pkt = XCPOnCAN(identifier=0x700) / CTORequest() / Connect()
     sock = CANSocket(iface=can.interface.Bus(bustype='socketcan', channel='vcan0'))
@@ -753,29 +753,29 @@ ISOTP message
 Creating an ISOTP message::
 
    load_contrib('isotp')
-   ISOTP(src=0x241, dst=0x641, data=b"\x3eabc")
+   ISOTP(tx_id=0x241, rx_id=0x641, data=b"\x3eabc")
 
 Creating an ISOTP message with extended addressing::
 
-   ISOTP(src=0x241, dst=0x641, exdst=0x41, data=b"\x3eabc")
+   ISOTP(tx_id=0x241, rx_id=0x641, rx_ext_address=0x41, data=b"\x3eabc")
 
 Creating an ISOTP message with extended addressing::
 
-   ISOTP(src=0x241, dst=0x641, exdst=0x41, exsrc=0x41, data=b"\x3eabc")
+   ISOTP(tx_id=0x241, rx_id=0x641, rx_ext_address=0x41, ext_address=0x41, data=b"\x3eabc")
 
 Create CAN-frames from an ISOTP message::
 
-   ISOTP(src=0x241, dst=0x641, exdst=0x41, exsrc=0x55, data=b"\x3eabc" * 10).fragment()
+   ISOTP(tx_id=0x241, rx_id=0x641, rx_ext_address=0x41, ext_address=0x55, data=b"\x3eabc" * 10).fragment()
 
 Send ISOTP message over ISOTP socket::
 
-   isoTpSocket = ISOTPSocket('vcan0', sid=0x241, did=0x641)
+   isoTpSocket = ISOTPSocket('vcan0', tx_id=0x241, rx_id=0x641)
    isoTpMessage = ISOTP('Message')
    isoTpSocket.send(isoTpMessage)
 
 Sniff ISOTP message::
 
-   isoTpSocket = ISOTPSocket('vcan0', sid=0x641, did=0x241)
+   isoTpSocket = ISOTPSocket('vcan0', tx_id=0x641, rx_id=0x241)
    packets = isoTpSocket.sniff(timeout=0.5)
 
 ISOTP Sockets
@@ -786,7 +786,7 @@ is using the Linux kernel module from Hartkopp. The other implementation, the ``
 is completely implemented in Python. This implementation can be used on Linux,
 Windows, and OSX.
 
-An ``ISOTPSocket`` will not respect ``src, dst, exdst, exsrc`` of an ``ISOTP``
+An ``ISOTPSocket`` will not respect ``tx_id, rx_id, rx_ext_address, ext_address`` of an ``ISOTP``
 message object.
 
 System compatibilities
@@ -817,7 +817,7 @@ socket creation. This ensures that ``ISOTPSoftSocket`` objects will get closed
 properly.
 Example::
 
-    with ISOTPSocket("vcan0", did=0x241, sid=0x641) as sock:
+    with ISOTPSocket("vcan0", rx_id=0x241, tx_id=0x641) as sock:
         sock.send(...)
 
 ISOTPNativeSocket
@@ -834,7 +834,7 @@ reliability, usually. If you are working on Linux, consider this implementation:
 
    conf.contribs['ISOTP'] = {'use-can-isotp-kernel-module': True}
    load_contrib('isotp')
-   sock = ISOTPSocket("can0", sid=0x641, did=0x241)
+   sock = ISOTPSocket("can0", tx_id=0x641, rx_id=0x241)
 
 Since this implementation is using a standard Linux socket, all Scapy functions
 like ``sniff, sr, sr1, bridge_and_sniff`` work out of the box.
@@ -848,7 +848,7 @@ Usage on Linux with native CANSockets::
 
    conf.contribs['ISOTP'] = {'use-can-isotp-kernel-module': False}
    load_contrib('isotp')
-   with ISOTPSocket("can0", sid=0x641, did=0x241) as sock:
+   with ISOTPSocket("can0", tx_id=0x641, rx_id=0x241) as sock:
        sock.send(...)
 
 Usage with python-can CANSockets::
@@ -856,7 +856,7 @@ Usage with python-can CANSockets::
    conf.contribs['ISOTP'] = {'use-can-isotp-kernel-module': False}
    conf.contribs['CANSocket'] = {'use-python-can': True}
    load_contrib('isotp')
-   with ISOTPSocket(CANSocket(bustype='socketcan', channel="can0"), sid=0x641, did=0x241) as sock:
+   with ISOTPSocket(CANSocket(bustype='socketcan', channel="can0"), tx_id=0x641, rx_id=0x241) as sock:
        sock.send(...)
 
 This second example allows the usage of any ``python_can.interface`` object.
@@ -886,8 +886,8 @@ Import modules::
 
 Create to ISOTP sockets for attack::
 
-   isoTpSocketVCan0 = ISOTPSocket('vcan0', sid=0x241, did=0x641)
-   isoTpSocketVCan1 = ISOTPSocket('vcan1', sid=0x641, did=0x241)
+   isoTpSocketVCan0 = ISOTPSocket('vcan0', tx_id=0x241, rx_id=0x641)
+   isoTpSocketVCan1 = ISOTPSocket('vcan1', tx_id=0x641, rx_id=0x241)
 
 Create function to send packet on vcan0 with threading::
 
@@ -904,8 +904,8 @@ Create function to forward packet::
 Create function to bridge and sniff between two buses::
 
    def bridge():
-       bSocket0 = ISOTPSocket('vcan0', sid=0x641, did=0x241)
-       bSocket1 = ISOTPSocket('vcan1', sid=0x241, did=0x641)
+       bSocket0 = ISOTPSocket('vcan0', tx_id=0x641, rx_id=0x241)
+       bSocket1 = ISOTPSocket('vcan1', tx_id=0x241, rx_id=0x641)
        bridge_and_sniff(if1=bSocket0, if2=bSocket1, xfrm12=forwarding, xfrm21=forwarding, timeout=1)
        bSocket0.close()
        bSocket1.close()
@@ -1158,7 +1158,7 @@ then casted to ``UDS`` objects through the ``basecls`` parameter
 Usage example::
 
     with PcapReader("test/contrib/automotive/ecu_trace.pcap") as sock:
-        udsmsgs = sniff(session=ISOTPSession, session_kwargs={"use_ext_addr":False, "basecls":UDS}, count=50, opened_socket=sock)
+        udsmsgs = sniff(session=ISOTPSession(use_ext_addr=False, basecls=UDS), count=50, opened_socket=sock)
 
 
     ecu = Ecu()
@@ -1183,7 +1183,7 @@ Usage example::
     session = EcuSession()
 
     with PcapReader("test/contrib/automotive/ecu_trace.pcap") as sock:
-        udsmsgs = sniff(session=ISOTPSession, session_kwargs={"supersession": session, "use_ext_addr":False, "basecls":UDS}, count=50, opened_socket=sock)
+        udsmsgs = sniff(session=ISOTPSession(use_ext_addr=False, basecls=UDS, supersession=session)), count=50, opened_socket=sock)
 
     ecu = session.ecu
     print(ecu.log)
@@ -1400,7 +1400,7 @@ To build a small test environment in which you can send SOME/IP messages to and 
 
 #. | **Vsomeip setup**
 
-   Download the vsomeip library on the Rapsberry, apply the git patch so it can work with the newer boost libraries and then install it.
+   Download the vsomeip library on the Raspberry, apply the git patch so it can work with the newer boost libraries and then install it.
 
    ::
 

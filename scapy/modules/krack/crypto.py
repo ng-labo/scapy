@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# This file is part of Scapy
+# See https://scapy.net/ for more information
+
 import hashlib
 import hmac
 from struct import unpack, pack
@@ -6,8 +10,6 @@ from zlib import crc32
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms
 from cryptography.hazmat.backends import default_backend
 
-import scapy.modules.six as six
-from scapy.modules.six.moves import range
 from scapy.compat import orb, chb
 from scapy.layers.dot11 import Dot11TKIP
 from scapy.utils import mac2str
@@ -155,7 +157,7 @@ def gen_TKIP_RC4_key(TSC, TA, TK):
     assert len(TSC) == 6
     assert len(TA) == 6
     assert len(TK) == 16
-    assert all(isinstance(x, six.integer_types) for x in TSC + TA + TK)
+    assert all(isinstance(x, int) for x in TSC + TA + TK)
 
     # Phase 1
     # 802.11i p.54

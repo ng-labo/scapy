@@ -1,7 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Nils Weiss <nils@we155.de>
-# This program is published under a GPLv2 license
 
 # scapy.contrib.description = ISO-TP (ISO 15765-2) Native Socket Library
 # scapy.contrib.status = library
@@ -11,17 +11,25 @@ from ctypes.util import find_library
 import struct
 import socket
 
-from scapy.compat import Optional, Union, Tuple, Type, cast
+from scapy.contrib.isotp import log_isotp
 from scapy.packet import Packet
-import scapy.modules.six as six
-from scapy.error import Scapy_Exception, warning
+from scapy.error import Scapy_Exception
 from scapy.supersocket import SuperSocket
 from scapy.data import SO_TIMESTAMPNS
 from scapy.config import conf
 from scapy.arch.linux import get_last_packet_timestamp, SIOCGIFINDEX
 from scapy.contrib.isotp.isotp_packet import ISOTP
-from scapy.layers.can import CAN_MTU, CAN_MAX_DLEN
+from scapy.layers.can import CAN_MTU, CAN_FD_MTU, CAN_MAX_DLEN, CAN_FD_MAX_DLEN
 
+# Typing imports
+from typing import (
+    Any,
+    Optional,
+    Union,
+    Tuple,
+    Type,
+    cast,
+)
 
 LIBC = ctypes.cdll.LoadLibrary(find_library("c"))  # type: ignore
 
@@ -58,7 +66,9 @@ CAN_ISOTP_DEFAULT_RECV_BS = 0
 CAN_ISOTP_DEFAULT_RECV_STMIN = 0x00
 CAN_ISOTP_DEFAULT_RECV_WFTMAX = 0
 CAN_ISOTP_DEFAULT_LL_MTU = CAN_MTU
+CAN_ISOTP_CANFD_MTU = CAN_FD_MTU
 CAN_ISOTP_DEFAULT_LL_TX_DL = CAN_MAX_DLEN
+CAN_FD_ISOTP_DEFAULT_LL_TX_DL = CAN_FD_MAX_DLEN
 CAN_ISOTP_DEFAULT_LL_TX_FLAGS = 0
 
 
@@ -89,6 +99,25 @@ class ifreq(ctypes.Structure):
 
 
 class ISOTPNativeSocket(SuperSocket):
+    """
+    ISOTPSocket using the can-isotp kernel module
+
+    :param iface: a CANSocket instance or an interface name
+    :param tx_id: the CAN identifier of the sent CAN frames
+    :param rx_id: the CAN identifier of the received CAN frames
+    :param ext_address: the extended address of the sent ISOTP frames
+    :param rx_ext_address: the extended address of the received ISOTP frames
+    :param bs: block size sent in Flow Control ISOTP frames
+    :param stmin: minimum desired separation time sent in
+                  Flow Control ISOTP frames
+    :param padding: If True, pads sending packets with 0x00 which not
+                    count to the payload.
+                    Does not affect receiving packets.
+    :param listen_only: Does not send Flow Control frames if a First Frame is
+                        received
+    :param frame_txtime: Separation time between two CAN frames during send
+    :param basecls: base class of the packets emitted by this socket
+    """
     desc = "read/write packets at a given CAN interface using CAN_ISOTP socket "  # noqa: E501
     can_isotp_options_fmt = "@2I4B"
     can_isotp_fc_options_fmt = "@3B"
@@ -204,27 +233,27 @@ class ISOTPNativeSocket(SuperSocket):
             raise Scapy_Exception(m)
         return ifr
 
-    def __bind_socket(self, sock, iface, sid, did):
+    def __bind_socket(self, sock, iface, tx_id, rx_id):
         # type: (socket.socket, str, int, int) -> None
         socket_id = ctypes.c_int(sock.fileno())
         ifr = self.__get_sock_ifreq(sock, iface)
 
-        if sid > 0x7ff:
-            sid = sid | socket.CAN_EFF_FLAG
-        if did > 0x7ff:
-            did = did | socket.CAN_EFF_FLAG
+        if tx_id > 0x7ff:
+            tx_id = tx_id | socket.CAN_EFF_FLAG
+        if rx_id > 0x7ff:
+            rx_id = rx_id | socket.CAN_EFF_FLAG
 
         # select the CAN interface and bind the socket to it
         addr = sockaddr_can(ctypes.c_uint16(socket.PF_CAN),
                             ifr.ifr_ifindex,
-                            addr_info(tp(ctypes.c_uint32(did),
-                                         ctypes.c_uint32(sid))))
+                            addr_info(tp(ctypes.c_uint32(rx_id),
+                                         ctypes.c_uint32(tx_id))))
 
         error = LIBC.bind(socket_id, ctypes.byref(addr),
                           ctypes.sizeof(addr))
 
         if error < 0:
-            warning("Couldn't bind socket")
+            log_isotp.warning("Couldn't bind socket")
 
     def __set_option_flags(self,
                            sock,  # type: socket.socket
@@ -262,19 +291,21 @@ class ISOTPNativeSocket(SuperSocket):
 
     def __init__(self,
                  iface=None,  # type: Optional[Union[str, SuperSocket]]
-                 sid=0,  # type: int
-                 did=0,  # type: int
-                 extended_addr=None,  # type: Optional[int]
-                 extended_rx_addr=None,  # type: Optional[int]
-                 listen_only=False,  # type: bool
+                 tx_id=0,  # type: int
+                 rx_id=0,  # type: int
+                 ext_address=None,  # type: Optional[int]
+                 rx_ext_address=None,  # type: Optional[int]
+                 bs=CAN_ISOTP_DEFAULT_RECV_BS,  # type: int
+                 stmin=CAN_ISOTP_DEFAULT_RECV_STMIN,  # type: int
                  padding=False,  # type: bool
-                 transmit_time=100,  # type: int
-                 stmin=0,  # type: int
+                 listen_only=False,  # type: bool
+                 frame_txtime=CAN_ISOTP_DEFAULT_FRAME_TXTIME,  # type: int
+                 fd=False,  # type: bool
                  basecls=ISOTP  # type: Type[Packet]
                  ):
         # type: (...) -> None
 
-        if not isinstance(iface, six.string_types):
+        if not isinstance(iface, str):
             # This is for interoperability with ISOTPSoftSockets.
             # If a NativeCANSocket is provided, the interface name of this
             # socket is extracted and an ISOTPNativeSocket will be opened
@@ -292,35 +323,39 @@ class ISOTPNativeSocket(SuperSocket):
         self.can_socket = socket.socket(socket.PF_CAN, socket.SOCK_DGRAM,
                                         CAN_ISOTP)
         self.__set_option_flags(self.can_socket,
-                                extended_addr,
-                                extended_rx_addr,
+                                ext_address,
+                                rx_ext_address,
                                 listen_only,
                                 padding,
-                                transmit_time)
+                                frame_txtime)
 
-        self.src = sid
-        self.dst = did
-        self.exsrc = extended_addr
-        self.exdst = extended_rx_addr
+        self.tx_id = tx_id
+        self.rx_id = rx_id
+        self.ext_address = ext_address
+        self.rx_ext_address = rx_ext_address
 
         self.can_socket.setsockopt(SOL_CAN_ISOTP,
                                    CAN_ISOTP_RECV_FC,
                                    self.__build_can_isotp_fc_options(
-                                       stmin=stmin))
+                                       stmin=stmin, bs=bs))
         self.can_socket.setsockopt(SOL_CAN_ISOTP,
                                    CAN_ISOTP_LL_OPTS,
-                                   self.__build_can_isotp_ll_options())
+                                   self.__build_can_isotp_ll_options(
+                                       mtu=CAN_ISOTP_CANFD_MTU if fd
+                                       else CAN_ISOTP_DEFAULT_LL_MTU,
+                                       tx_dl=CAN_FD_ISOTP_DEFAULT_LL_TX_DL if fd
+                                       else CAN_ISOTP_DEFAULT_LL_TX_DL))
         self.can_socket.setsockopt(
             socket.SOL_SOCKET,
             SO_TIMESTAMPNS,
             1
         )
 
-        self.__bind_socket(self.can_socket, self.iface, sid, did)
+        self.__bind_socket(self.can_socket, self.iface, tx_id, rx_id)
         self.ins = self.can_socket
         self.outs = self.can_socket
         if basecls is None:
-            warning('Provide a basecls ')
+            log_isotp.warning('Provide a basecls ')
         self.basecls = basecls
 
     def recv_raw(self, x=0xffff):
@@ -332,39 +367,45 @@ class ISOTPNativeSocket(SuperSocket):
         try:
             pkt, _, ts = self._recv_raw(self.ins, x)
         except BlockingIOError:  # noqa: F821
-            warning('Captured no data, socket in non-blocking mode.')
+            log_isotp.warning('Captured no data, socket in non-blocking mode.')
             return None, None, None
         except socket.timeout:
-            warning('Captured no data, socket read timed out.')
+            log_isotp.warning('Captured no data, socket read timed out.')
             return None, None, None
         except OSError as e:
             # something bad happened (e.g. the interface went down)
-            warning("Captured no data. %s" % e)
+            log_isotp.warning("Captured no data. %s" % e)
             if e.errno == 84:
-                warning("Maybe a consecutive frame was missed. "
-                        "Increasing `stmin` could solve this problem.")
+                log_isotp.warning("Maybe a consecutive frame was missed. "
+                                  "Increasing `stmin` could solve this problem.")
             elif e.errno == 110:
-                warning('Captured no data, socket read timed out.')
+                log_isotp.warning('Captured no data, socket read timed out.')
+            elif e.errno == 70:
+                log_isotp.warning(
+                    'Communication error on send. '
+                    'TX path flowcontrol reception timeout.')
             else:
+                log_isotp.error(
+                    'Unknown error code received %d. Closing socket!', e.errno)
                 self.close()
             return None, None, None
 
-        if ts is None:
+        if pkt and ts is None:
             ts = get_last_packet_timestamp(self.ins)
         return self.basecls, pkt, ts
 
-    def recv(self, x=0xffff):
-        # type: (int) -> Optional[Packet]
-        msg = SuperSocket.recv(self, x)
+    def recv(self, x=0xffff, **kwargs):
+        # type: (int, **Any) -> Optional[Packet]
+        msg = SuperSocket.recv(self, x, **kwargs)
         if msg is None:
             return msg
 
-        if hasattr(msg, "src"):
-            msg.src = self.src
-        if hasattr(msg, "dst"):
-            msg.dst = self.dst
-        if hasattr(msg, "exsrc"):
-            msg.exsrc = self.exsrc
-        if hasattr(msg, "exdst"):
-            msg.exdst = self.exdst
+        if hasattr(msg, "tx_id"):
+            msg.tx_id = self.tx_id
+        if hasattr(msg, "rx_id"):
+            msg.rx_id = self.rx_id
+        if hasattr(msg, "ext_address"):
+            msg.ext_address = self.ext_address
+        if hasattr(msg, "rx_ext_address"):
+            msg.rx_ext_address = self.rx_ext_address
         return msg

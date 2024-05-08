@@ -5,9 +5,7 @@
 
 = Imports
 
-with open(scapy_path("test/contrib/automotive/interface_mockup.py")) as f:
-    exec(f.read())
-
+from test.testsocket import TestSocket, cleanup_testsockets
 
 ############
 ############
@@ -17,10 +15,7 @@ with open(scapy_path("test/contrib/automotive/interface_mockup.py")) as f:
 
 load_contrib("automotive.uds", globals_dict=globals())
 load_contrib("automotive.ecu", globals_dict=globals())
-
-from scapy.contrib.automotive.uds_ecu_states import *
-
-conf.contribs['EcuAnsweringMachine']['send_delay'] = 0
+load_contrib("automotive.uds_ecu_states", globals_dict=globals())
 
 ecu = TestSocket(UDS)
 tester = TestSocket(UDS)
@@ -402,3 +397,9 @@ finally:
 assert success
 
 conf.contribs['UDS']['treat-response-pending-as-answer'] = False
+
++ Cleanup
+
+= Delete TestSockets
+
+cleanup_testsockets()

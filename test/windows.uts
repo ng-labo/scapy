@@ -46,6 +46,13 @@ from scapy.arch.windows import pcap_service_status
 status = pcap_service_status()
 assert status
 
+= test get_if_list
+
+from scapy.interfaces import get_if_list
+
+print(get_if_list())
+assert all(x.startswith(r"\Device\NPF_") for x in get_if_list())
+
 = test pcap_service_stop
 ~ appveyor_only require_gui
 
@@ -63,14 +70,14 @@ assert pcap_service_status()[2] == True
 @mock.patch("scapy.arch.windows.get_windows_if_list")
 def _test_autostart_ui(mocked_getiflist):
     mocked_getiflist.side_effect = lambda: []
-    IFACES.reload()
-    assert all(x.index < 0 for x in IFACES.data.values())
+    conf.ifaces.reload()
+    assert all(x.index < 0 for x in conf.ifaces.data.values())
 
 try:
-    old_ifaces = IFACES.data.copy()
+    old_ifaces = conf.ifaces.data.copy()
     _test_autostart_ui()
 finally:
-     IFACES.data = old_ifaces
+     conf.ifaces.data = old_ifaces
 
 ######### Native mode ###########
 
@@ -101,10 +108,13 @@ True
 = Ping
 ~ netaccess needs_root
 
-with conf.L3socket() as a:
-    answer = a.sr1(IP(dst="www.google.com", ttl=128)/ICMP(id=1, seq=seq)/"abcdefghijklmnopqrstuvwabcdefghi", timeout=2)
-    answer.show()
-    assert ICMP in answer
+def _test():
+    with conf.L3socket() as a:
+        answer = a.sr1(IP(dst="www.google.com", ttl=128)/ICMP(id=1, seq=seq)/"abcdefghijklmnopqrstuvwabcdefghi", timeout=2)
+        answer.show()
+        assert ICMP in answer
+
+retry_test(_test)
 
 = DNS lookup
 ~ netaccess needs_root require_gui

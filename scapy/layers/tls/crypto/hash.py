@@ -1,15 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
+# See https://scapy.net/ for more information
 # Copyright (C) 2007, 2008, 2009 Arnaud Ebalard
 #               2015, 2016 Maxence Tury
-# This program is published under a GPLv2 license
 
 """
 Hash classes.
 """
 
-from __future__ import absolute_import
 from hashlib import md5, sha1, sha224, sha256, sha384, sha512
-import scapy.modules.six as six
+from scapy.layers.tls.crypto.md4 import MD4 as md4
 
 
 _tls_hash_algs = {}
@@ -30,7 +30,7 @@ class _GenericHashMetaclass(type):
         return the_class
 
 
-class _GenericHash(six.with_metaclass(_GenericHashMetaclass, object)):
+class _GenericHash(metaclass=_GenericHashMetaclass):
     def digest(self, tbd):
         return self.hash_cls(tbd).digest()
 
@@ -40,6 +40,11 @@ class Hash_NULL(_GenericHash):
 
     def digest(self, tbd):
         return b""
+
+
+class Hash_MD4(_GenericHash):
+    hash_cls = md4
+    hash_len = 16
 
 
 class Hash_MD5(_GenericHash):

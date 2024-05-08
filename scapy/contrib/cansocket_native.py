@@ -1,7 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Nils Weiss <nils@we155.de>
-# This program is published under a GPLv2 license
 
 # scapy.contrib.description = Native CANSocket
 # scapy.contrib.status = loads
@@ -15,12 +15,22 @@ import socket
 import time
 
 from scapy.config import conf
+from scapy.data import SO_TIMESTAMPNS
 from scapy.supersocket import SuperSocket
-from scapy.error import Scapy_Exception, warning
+from scapy.error import Scapy_Exception, warning, log_runtime
 from scapy.packet import Packet
-from scapy.layers.can import CAN, CAN_MTU
-from scapy.arch.linux import get_last_packet_timestamp
-from scapy.compat import List, Dict, Type, Any, Optional, Tuple, raw, cast
+from scapy.layers.can import CAN, CAN_MTU, CAN_FD_MTU
+from scapy.compat import raw
+
+from typing import (
+    List,
+    Dict,
+    Type,
+    Any,
+    Optional,
+    Tuple,
+    cast,
+)
 
 conf.contribs['NativeCANSocket'] = {'channel': "can0"}
 
@@ -45,6 +55,7 @@ class NativeCANSocket(SuperSocket):
                  channel=None,  # type: Optional[str]
                  receive_own_messages=False,  # type: bool
                  can_filters=None,  # type: Optional[List[Dict[str, int]]]
+                 fd=False,  # type: bool
                  basecls=CAN,  # type: Type[Packet]
                  **kwargs  # type: Dict[str, Any]
                  ):
@@ -56,6 +67,8 @@ class NativeCANSocket(SuperSocket):
                     "the correct one to achieve compatibility with python-can"
                     "/PythonCANSocket. \n'bustype=socketcan'")
 
+        self.MTU = CAN_MTU
+        self.fd = fd
         self.basecls = basecls
         self.channel = conf.contribs['NativeCANSocket']['channel'] if \
             channel is None else channel
@@ -70,6 +83,31 @@ class NativeCANSocket(SuperSocket):
             raise Scapy_Exception(
                 "Could not modify receive own messages (%s)", exception
             )
+
+        try:
+            # Receive Auxiliary Data (Timestamps)
+            self.ins.setsockopt(
+                socket.SOL_SOCKET,
+                SO_TIMESTAMPNS,
+                1
+            )
+            self.auxdata_available = True
+        except OSError:
+            # Note: Auxiliary Data is only supported since
+            #       Linux 2.6.21
+            msg = "Your Linux Kernel does not support Auxiliary Data!"
+            log_runtime.info(msg)
+
+        if self.fd:
+            try:
+                self.ins.setsockopt(socket.SOL_CAN_RAW,
+                                    socket.CAN_RAW_FD_FRAMES,
+                                    1)
+                self.MTU = CAN_FD_MTU
+            except Exception as exception:
+                raise Scapy_Exception(
+                    "Could not enable CAN FD support (%s)", exception
+                )
 
         if can_filters is None:
             can_filters = [{
@@ -94,8 +132,9 @@ class NativeCANSocket(SuperSocket):
         # type: (int) -> Tuple[Optional[Type[Packet]], Optional[bytes], Optional[float]]  # noqa: E501
         """Returns a tuple containing (cls, pkt_data, time)"""
         pkt = None
+        ts = None
         try:
-            pkt = self.ins.recv(x)
+            pkt, _, ts = self._recv_raw(self.ins, self.MTU)
         except BlockingIOError:  # noqa: F821
             warning("Captured no data, socket in non-blocking mode.")
         except socket.timeout:
@@ -106,13 +145,22 @@ class NativeCANSocket(SuperSocket):
 
         # need to change the byte order of the first four bytes,
         # required by the underlying Linux SocketCAN frame format
-        if not conf.contribs['CAN']['swap-bytes'] and pkt is not None:
-            pkt = struct.pack("<I12s", *struct.unpack(">I12s", pkt))
+        if not conf.contribs['CAN']['swap-bytes'] and pkt:
+            pack_fmt = "<I%ds" % (len(pkt) - 4)
+            unpack_fmt = ">I%ds" % (len(pkt) - 4)
+            pkt = struct.pack(pack_fmt, *struct.unpack(unpack_fmt, pkt))
 
-        return self.basecls, pkt, get_last_packet_timestamp(self.ins)
+        if pkt and ts is None:
+            from scapy.arch.linux import get_last_packet_timestamp
+            ts = get_last_packet_timestamp(self.ins)
+
+        return self.basecls, pkt, ts
 
     def send(self, x):
         # type: (Packet) -> int
+        if x is None:
+            return 0
+
         try:
             x.sent_time = time.time()
         except AttributeError:
@@ -122,8 +170,11 @@ class NativeCANSocket(SuperSocket):
         # required by the underlying Linux SocketCAN frame format
         bs = raw(x)
         if not conf.contribs['CAN']['swap-bytes']:
-            bs = bs + b'\x00' * (CAN_MTU - len(bs))
-            bs = struct.pack("<I12s", *struct.unpack(">I12s", bs))
+            pack_fmt = "<I%ds" % (len(bs) - 4)
+            unpack_fmt = ">I%ds" % (len(bs) - 4)
+            bs = struct.pack(pack_fmt, *struct.unpack(unpack_fmt, bs))
+
+        bs = bs + b"\x00" * (self.MTU - len(bs))
 
         return super(NativeCANSocket, self).send(bs)  # type: ignore
 

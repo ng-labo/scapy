@@ -1,24 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
+# See https://scapy.net/ for more information
 # Copyright (C) 2007, 2008, 2009 Arnaud Ebalard
 #               2015, 2016, 2017 Maxence Tury
-# This program is published under a GPLv2 license
 
 """
 Block ciphers.
 """
 
-from __future__ import absolute_import
+import warnings
+
 from scapy.config import conf
 from scapy.layers.tls.crypto.common import CipherError
-import scapy.modules.six as six
 
 if conf.crypto_valid:
-    from cryptography.utils import register_interface
+    from cryptography.utils import (
+        CryptographyDeprecationWarning,
+    )
     from cryptography.hazmat.primitives.ciphers import (Cipher, algorithms, modes,  # noqa: E501
                                                         BlockCipherAlgorithm,
                                                         CipherAlgorithm)
-    from cryptography.hazmat.backends.openssl.backend import (backend,
-                                                              GetCipherByName)
+    from cryptography.hazmat.backends.openssl.backend import backend
 
 
 _tls_block_cipher_algs = {}
@@ -39,7 +41,7 @@ class _BlockCipherMetaclass(type):
         return the_class
 
 
-class _BlockCipher(six.with_metaclass(_BlockCipherMetaclass, object)):
+class _BlockCipher(metaclass=_BlockCipherMetaclass):
     type = "block"
 
     def __init__(self, key=None, iv=None):
@@ -79,7 +81,7 @@ class _BlockCipher(six.with_metaclass(_BlockCipherMetaclass, object)):
         Encrypt the data. Also, update the cipher iv. This is needed for SSLv3
         and TLS 1.0. For TLS 1.1/1.2, it is overwritten in TLS.post_build().
         """
-        if False in six.itervalues(self.ready):
+        if False in self.ready.values():
             raise CipherError(data)
         encryptor = self._cipher.encryptor()
         tmp = encryptor.update(data) + encryptor.finalize()
@@ -92,7 +94,7 @@ class _BlockCipher(six.with_metaclass(_BlockCipherMetaclass, object)):
         and TLS 1.0. For TLS 1.1/1.2, it is overwritten in TLS.pre_dissect().
         If we lack the key, we raise a CipherError which contains the input.
         """
-        if False in six.itervalues(self.ready):
+        if False in self.ready.values():
             raise CipherError(data)
         decryptor = self._cipher.decryptor()
         tmp = decryptor.update(data) + decryptor.finalize()
@@ -127,6 +129,8 @@ if conf.crypto_valid:
 
 # Mostly deprecated ciphers
 
+_sslv2_block_cipher_algs = {}
+
 if conf.crypto_valid:
     class Cipher_DES_CBC(_BlockCipher):
         pc_cls = algorithms.TripleDES
@@ -152,27 +156,32 @@ if conf.crypto_valid:
         block_size = 8
         key_len = 24
 
-    class Cipher_IDEA_CBC(_BlockCipher):
-        pc_cls = algorithms.IDEA
-        pc_cls_mode = modes.CBC
-        block_size = 8
-        key_len = 16
+    _sslv2_block_cipher_algs["DES_192_EDE3_CBC"] = Cipher_3DES_EDE_CBC
 
-    class Cipher_SEED_CBC(_BlockCipher):
-        pc_cls = algorithms.SEED
-        pc_cls_mode = modes.CBC
-        block_size = 16
-        key_len = 16
+    try:
+        with warnings.catch_warnings():
+            # Hide deprecation warnings
+            warnings.filterwarnings("ignore",
+                                    category=CryptographyDeprecationWarning)
 
+            class Cipher_IDEA_CBC(_BlockCipher):
+                pc_cls = algorithms.IDEA
+                pc_cls_mode = modes.CBC
+                block_size = 8
+                key_len = 16
 
-_sslv2_block_cipher_algs = {}
+            class Cipher_SEED_CBC(_BlockCipher):
+                pc_cls = algorithms.SEED
+                pc_cls_mode = modes.CBC
+                block_size = 16
+                key_len = 16
 
-if conf.crypto_valid:
-    _sslv2_block_cipher_algs.update({
-        "IDEA_128_CBC": Cipher_IDEA_CBC,
-        "DES_64_CBC": Cipher_DES_CBC,
-        "DES_192_EDE3_CBC": Cipher_3DES_EDE_CBC
-    })
+            _sslv2_block_cipher_algs.update({
+                "IDEA_128_CBC": Cipher_IDEA_CBC,
+                "DES_64_CBC": Cipher_DES_CBC,
+            })
+    except AttributeError:
+        pass
 
 
 # We need some black magic for RC2, which is not registered by default
@@ -181,26 +190,41 @@ if conf.crypto_valid:
 # silently not declared, and the corresponding suites will have 'usable' False.
 
 if conf.crypto_valid:
-    @register_interface(BlockCipherAlgorithm)
-    @register_interface(CipherAlgorithm)
-    class _ARC2(object):
-        name = "RC2"
-        block_size = 64
-        key_sizes = frozenset([128])
+    try:
+        from cryptography.hazmat.decrepit.ciphers.algorithms import RC2
+        rc2_available = backend.cipher_supported(
+            RC2(b"0" * 16), modes.CBC(b"0" * 8)
+        )
+    except ImportError:
+        # Legacy path for cryptography < 43.0.0
+        from cryptography.hazmat.backends.openssl.backend import (
+            GetCipherByName
+        )
+        _gcbn_format = "{cipher.name}-{mode.name}"
 
-        def __init__(self, key):
-            self.key = algorithms._verify_key_size(self, key)
+        class RC2(BlockCipherAlgorithm, CipherAlgorithm):
+            name = "RC2"
+            block_size = 64
+            key_sizes = frozenset([128])
 
-        @property
-        def key_size(self):
-            return len(self.key) * 8
+            def __init__(self, key):
+                self.key = algorithms._verify_key_size(self, key)
 
-    _gcbn_format = "{cipher.name}-{mode.name}"
-    if GetCipherByName(_gcbn_format)(backend, _ARC2, modes.CBC) != \
-            backend._ffi.NULL:
+            @property
+            def key_size(self):
+                return len(self.key) * 8
+        if GetCipherByName(_gcbn_format)(backend, RC2, modes.CBC) != \
+                backend._ffi.NULL:
+            rc2_available = True
+            backend.register_cipher_adapter(RC2,
+                                            modes.CBC,
+                                            GetCipherByName(_gcbn_format))
+        else:
+            rc2_available = False
 
+    if rc2_available:
         class Cipher_RC2_CBC(_BlockCipher):
-            pc_cls = _ARC2
+            pc_cls = RC2
             pc_cls_mode = modes.CBC
             block_size = 8
             key_len = 16
@@ -208,10 +232,6 @@ if conf.crypto_valid:
         class Cipher_RC2_CBC_40(Cipher_RC2_CBC):
             expanded_key_len = 16
             key_len = 5
-
-        backend.register_cipher_adapter(Cipher_RC2_CBC.pc_cls,
-                                        Cipher_RC2_CBC.pc_cls_mode,
-                                        GetCipherByName(_gcbn_format))
 
         _sslv2_block_cipher_algs["RC2_128_CBC"] = Cipher_RC2_CBC
 

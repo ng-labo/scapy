@@ -1,23 +1,36 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Nils Weiss <nils@we155.de>
 # Copyright (C) Enrico Pozzobon <enricopozzobon@gmail.com>
 # Copyright (C) Alexander Schroeder <alexander1.schroeder@st.othr.de>
-# This program is published under a GPLv2 license
 
 # scapy.contrib.description = ISO-TP (ISO 15765-2) Utilities
 # scapy.contrib.status = library
 
 import struct
 
-from scapy.compat import Iterable, Optional, Union, List, Tuple, Dict, Any, \
-    Type
+from scapy.config import conf
 from scapy.utils import EDecimal
 from scapy.packet import Packet
 from scapy.sessions import DefaultSession
+from scapy.supersocket import SuperSocket
 from scapy.contrib.isotp.isotp_packet import ISOTP, N_PCI_CF, N_PCI_SF, \
     N_PCI_FF, N_PCI_FC
-import scapy.modules.six as six
+
+# Typing imports
+from typing import (
+    cast,
+    Iterable,
+    Iterator,
+    Optional,
+    Union,
+    List,
+    Tuple,
+    Dict,
+    Any,
+    Type,
+)
 
 
 class ISOTPMessageBuilderIter(object):
@@ -62,11 +75,11 @@ class ISOTPMessageBuilder(object):
     CAN frames are fed to an ISOTPMessageBuilder object with the feed() method
     and the resulting ISOTP frames can be extracted using the pop() method.
 
-    :param use_ext_addr: True for only attempting to defragment with
+    :param use_ext_address: True for only attempting to defragment with
                          extended addressing, False for only attempting
                          to defragment without extended addressing,
                          or None for both
-    :param did: Destination Identifier
+    :param rx_id: Destination Identifier
     :param basecls: The class of packets that will be returned,
                     defaults to ISOTP
     """
@@ -82,8 +95,8 @@ class ISOTPMessageBuilder(object):
             self.total_len = total_len
             self.current_len = 0
             self.ready = None  # type: Optional[bytes]
-            self.src = None  # type: Optional[int]
-            self.exsrc = None  # type: Optional[int]
+            self.tx_id = None  # type: Optional[int]
+            self.ext_address = None  # type: Optional[int]
             self.time = ts  # type: Union[float, EDecimal]
             self.push(first_piece)
 
@@ -92,35 +105,32 @@ class ISOTPMessageBuilder(object):
             self.pieces.append(piece)
             self.current_len += len(piece)
             if self.current_len >= self.total_len:
-                if six.PY3:
-                    isotp_data = b"".join(self.pieces)
-                else:
-                    isotp_data = "".join(map(str, self.pieces))
+                isotp_data = b"".join(self.pieces)
                 self.ready = isotp_data[:self.total_len]
 
     def __init__(
             self,
-            use_ext_addr=None,  # type: Optional[bool]
-            did=None,  # type: Optional[Union[int, List[int], Iterable[int]]]
-            basecls=ISOTP  # type: Type[Packet]
+            use_ext_address=None,  # type: Optional[bool]
+            rx_id=None,  # type: Optional[Union[int, List[int], Iterable[int]]]
+            basecls=ISOTP  # type: Type[ISOTP]
     ):
         # type: (...) -> None
         self.ready = []  # type: List[Tuple[int, Optional[int], ISOTPMessageBuilder.Bucket]]  # noqa: E501
         self.buckets = {}  # type: Dict[Tuple[Optional[int], int, int], ISOTPMessageBuilder.Bucket]  # noqa: E501
-        self.use_ext_addr = use_ext_addr
+        self.use_ext_addr = use_ext_address
         self.basecls = basecls
-        self.dst_ids = None  # type: Optional[Iterable[int]]
+        self.rx_ids = None  # type: Optional[Iterable[int]]
         self.last_ff = None  # type: Optional[Tuple[Optional[int], int, int]]
         self.last_ff_ex = None  # type: Optional[Tuple[Optional[int], int, int]]  # noqa: E501
-        if did is not None:
-            if isinstance(did, list):
-                self.dst_ids = did
-            elif isinstance(did, int):
-                self.dst_ids = [did]
-            elif hasattr(did, "__iter__"):
-                self.dst_ids = did
+        if rx_id is not None:
+            if isinstance(rx_id, list):
+                self.rx_ids = rx_id
+            elif isinstance(rx_id, int):
+                self.rx_ids = [rx_id]
+            elif hasattr(rx_id, "__iter__"):
+                self.rx_ids = rx_id
             else:
-                raise TypeError("Invalid type for argument did!")
+                raise TypeError("Invalid type for argument rx_id!")
 
     def feed(self, can):
         # type: (Union[Iterable[Packet], Packet]) -> None
@@ -133,7 +143,7 @@ class ISOTPMessageBuilder(object):
         if not isinstance(can, Packet):
             return
 
-        if self.dst_ids is not None and can.identifier not in self.dst_ids:
+        if self.rx_ids is not None and can.identifier not in self.rx_ids:
             return
 
         data = bytes(can.data)
@@ -141,7 +151,7 @@ class ISOTPMessageBuilder(object):
         if len(data) > 1 and self.use_ext_addr is not True:
             self._try_feed(can.identifier, None, data, can.time)
         if len(data) > 2 and self.use_ext_addr is not False:
-            ea = six.indexbytes(data, 0)
+            ea = data[0]
             self._try_feed(can.identifier, ea, data[1:], can.time)
 
     @property
@@ -159,7 +169,7 @@ class ISOTPMessageBuilder(object):
         return self.count
 
     def pop(self, identifier=None, ext_addr=None):
-        # type: (Optional[int], Optional[int]) -> Optional[Packet]
+        # type: (Optional[int], Optional[int]) -> Optional[ISOTP]
         """Returns a built ISOTP message
 
         :param identifier: if not None, only return isotp messages with this
@@ -190,20 +200,26 @@ class ISOTPMessageBuilder(object):
     @staticmethod
     def _build(
             t,  # type: Tuple[int, Optional[int], ISOTPMessageBuilder.Bucket]
-            basecls=ISOTP  # type: Type[Packet]
+            basecls=ISOTP  # type: Type[ISOTP]
     ):
-        # type: (...) -> Packet
+        # type: (...) -> ISOTP
         bucket = t[2]
         data = bucket.ready or b""
-        p = basecls(data)
-        if hasattr(p, "dst"):
-            p.dst = t[0]
-        if hasattr(p, "exdst"):
-            p.exdst = t[1]
-        if hasattr(p, "src"):
-            p.src = bucket.src
-        if hasattr(p, "exsrc"):
-            p.exsrc = bucket.exsrc
+        try:
+            p = basecls(data)
+        except Exception:
+            if conf.debug_dissector:
+                from scapy.sendrecv import debug
+                debug.crashed_on = (basecls, data)
+            raise
+        if hasattr(p, "rx_id"):
+            p.rx_id = t[0]
+        if hasattr(p, "rx_ext_address"):
+            p.rx_ext_address = t[1]
+        if hasattr(p, "tx_id"):
+            p.tx_id = bucket.tx_id
+        if hasattr(p, "ext_address"):
+            p.ext_address = bucket.ext_address
         if hasattr(p, "time"):
             p.time = bucket.time
         return p
@@ -235,7 +251,7 @@ class ISOTPMessageBuilder(object):
             # At least 2 bytes are necessary: 1 for length and 1 for data
             return False
 
-        length = six.indexbytes(data, 0) & 0x0f
+        length = data[0] & 0x0f
         isotp_data = data[1:length + 1]
 
         if length > len(isotp_data):
@@ -253,7 +269,7 @@ class ISOTPMessageBuilder(object):
             # 1 for data
             return False
 
-        first_byte = six.indexbytes(data, 0)
+        first_byte = data[0]
         seq_no = first_byte & 0x0f
         isotp_data = data[1:]
 
@@ -296,14 +312,14 @@ class ISOTPMessageBuilder(object):
         for key, bucket in zip(keys, buckets):
             if bucket is None:
                 continue
-            bucket.src = identifier
-            bucket.exsrc = ea
+            bucket.tx_id = identifier
+            bucket.ext_address = ea
             self.buckets[key] = bucket
         return True
 
     def _try_feed(self, identifier, ea, data, ts):
         # type: (int, Optional[int], bytes, Union[EDecimal, float]) -> None
-        first_byte = six.indexbytes(data, 0)
+        first_byte = data[0]
         if len(data) > 1 and first_byte & 0xf0 == N_PCI_SF:
             self._feed_single_frame(identifier, ea, data, ts)
         if len(data) > 2 and first_byte & 0xf0 == N_PCI_FF:
@@ -323,20 +339,23 @@ class ISOTPSession(DefaultSession):
 
     def __init__(self, *args, **kwargs):
         # type: (Any, Any) -> None
-        super(ISOTPSession, self).__init__(*args, **kwargs)
         self.m = ISOTPMessageBuilder(
-            use_ext_addr=kwargs.pop("use_ext_addr", None),
-            did=kwargs.pop("did", None),
+            use_ext_address=kwargs.pop("use_ext_address", None),
+            rx_id=kwargs.pop("rx_id", None),
             basecls=kwargs.pop("basecls", ISOTP))
+        super(ISOTPSession, self).__init__(*args, **kwargs)
 
-    def on_packet_received(self, pkt):
-        # type: (Optional[Packet]) -> None
+    def recv(self, sock: SuperSocket) -> Iterator[Packet]:
+        """
+        Will be called by sniff() to ask for a packet
+        """
+        pkt = sock.recv()
         if not pkt:
             return
         self.m.feed(pkt)
         while len(self.m) > 0:
-            rcvd = self.m.pop()
-            if self._supersession:
-                self._supersession.on_packet_received(rcvd)
-            else:
-                super(ISOTPSession, self).on_packet_received(rcvd)
+            rcvd = cast(Optional[Packet], self.m.pop())
+            if rcvd:
+                rcvd = self.process(rcvd)
+            if rcvd:
+                yield rcvd

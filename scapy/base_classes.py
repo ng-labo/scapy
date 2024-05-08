@@ -1,7 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
 
 """
 Generators and packet meta classes.
@@ -11,9 +11,9 @@ Generators and packet meta classes.
 #  Generators  #
 ################
 
-from __future__ import absolute_import
 
 from functools import reduce
+import abc
 import operator
 import os
 import random
@@ -27,11 +27,8 @@ import warnings
 import scapy
 from scapy.error import Scapy_Exception
 from scapy.consts import WINDOWS
-import scapy.modules.six as six
 
-from scapy.modules.six.moves import range
-
-from scapy.compat import (
+from typing import (
     Any,
     Dict,
     Generic,
@@ -42,19 +39,20 @@ from scapy.compat import (
     Type,
     TypeVar,
     Union,
-    _Generic_metaclass,
     cast,
+    TYPE_CHECKING,
 )
 
-try:
-    import pyx
-except ImportError:
-    pass
+if TYPE_CHECKING:
+    try:
+        import pyx
+    except ImportError:
+        pass
+    from scapy.packet import Packet
 
 _T = TypeVar("_T")
 
 
-@six.add_metaclass(_Generic_metaclass)
 class Gen(Generic[_T]):
     __slots__ = []  # type: List[str]
 
@@ -232,10 +230,7 @@ class Net(Gen[str]):
             return self.__class__(other) in self
         if type(other) is not self.__class__:
             return False
-        return cast(
-            bool,
-            (self.start <= other.start <= other.stop <= self.stop),
-        )
+        return self.start <= other.start <= other.stop <= self.stop
 
 
 class OID(Gen[str]):
@@ -283,20 +278,20 @@ class OID(Gen[str]):
 #  Packet abstract and base classes  #
 ######################################
 
-class Packet_metaclass(_Generic_metaclass):
-    def __new__(cls,  # type: ignore
+class Packet_metaclass(type):
+    def __new__(cls: Type[_T],
                 name,  # type: str
                 bases,  # type: Tuple[type, ...]
                 dct  # type: Dict[str, Any]
                 ):
-        # type: (...) -> Type['scapy.packet.Packet']
+        # type: (...) -> Type['Packet']
         if "fields_desc" in dct:  # perform resolution of references to other packets  # noqa: E501
             current_fld = dct["fields_desc"]  # type: List[Union[scapy.fields.Field[Any, Any], Packet_metaclass]]  # noqa: E501
             resolved_fld = []  # type: List[scapy.fields.Field[Any, Any]]
             for fld_or_pkt in current_fld:
                 if isinstance(fld_or_pkt, Packet_metaclass):
                     # reference to another fields_desc
-                    for pkt_fld in fld_or_pkt.fields_desc:  # type: ignore
+                    for pkt_fld in fld_or_pkt.fields_desc:
                         resolved_fld.append(pkt_fld)
                 else:
                     resolved_fld.append(fld_or_pkt)
@@ -304,7 +299,7 @@ class Packet_metaclass(_Generic_metaclass):
             resolved_fld = []
             for b in bases:
                 if hasattr(b, "fields_desc"):
-                    resolved_fld = b.fields_desc  # type: ignore
+                    resolved_fld = b.fields_desc
                     break
 
         if resolved_fld:  # perform default value replacements
@@ -326,7 +321,7 @@ class Packet_metaclass(_Generic_metaclass):
                 if f.name in dct:
                     f = f.copy()
                     f.default = dct[f.name]
-                    del(dct[f.name])
+                    del dct[f.name]
                 final_fld.append(f)
 
             dct["fields_desc"] = final_fld
@@ -337,7 +332,21 @@ class Packet_metaclass(_Generic_metaclass):
                 dct["_%s" % attr] = dct.pop(attr)
             except KeyError:
                 pass
-        newcls = type.__new__(cls, name, bases, dct)
+        # Build and inject signature
+        try:
+            # Py3 only
+            import inspect
+            dct["__signature__"] = inspect.Signature([
+                inspect.Parameter("_pkt", inspect.Parameter.POSITIONAL_ONLY),
+            ] + [
+                inspect.Parameter(f.name,
+                                  inspect.Parameter.KEYWORD_ONLY,
+                                  default=f.default)
+                for f in dct["fields_desc"]
+            ])
+        except (ImportError, AttributeError, KeyError):
+            pass
+        newcls = cast(Type['Packet'], type.__new__(cls, name, bases, dct))
         # Note: below can't be typed because we use attributes
         # created dynamically..
         newcls.__all_slots__ = set(  # type: ignore
@@ -351,40 +360,40 @@ class Packet_metaclass(_Generic_metaclass):
         )
 
         if hasattr(newcls, "register_variant"):
-            newcls.register_variant()  # type: ignore
-        for f in newcls.fields_desc:  # type: ignore
-            if hasattr(f, "register_owner"):
-                f.register_owner(newcls)
+            newcls.register_variant()
+        for _f in newcls.fields_desc:
+            if hasattr(_f, "register_owner"):
+                _f.register_owner(newcls)
         if newcls.__name__[0] != "_":
             from scapy import config
             config.conf.layers.register(newcls)
         return newcls
 
     def __getattr__(self, attr):
-        # type: (str) -> scapy.fields.Field[Any, Any]
-        for k in self.fields_desc:  # type: ignore
+        # type: (str) -> Any
+        for k in self.fields_desc:
             if k.name == attr:
-                return k  # type: ignore
+                return k
         raise AttributeError(attr)
 
     def __call__(cls,
                  *args,  # type: Any
                  **kargs  # type: Any
                  ):
-        # type: (...) -> 'scapy.packet.Packet'
+        # type: (...) -> 'Packet'
         if "dispatch_hook" in cls.__dict__:
             try:
-                cls = cls.dispatch_hook(*args, **kargs)  # type: ignore
+                cls = cls.dispatch_hook(*args, **kargs)
             except Exception:
                 from scapy import config
                 if config.conf.debug_dissector:
                     raise
-                cls = config.conf.raw_layer  # type: ignore
+                cls = config.conf.raw_layer
         i = cls.__new__(
             cls,  # type: ignore
             cls.__name__,
             cls.__bases__,
-            cls.__dict__
+            cls.__dict__  # type: ignore
         )
         i.__init__(*args, **kargs)
         return i  # type: ignore
@@ -392,22 +401,22 @@ class Packet_metaclass(_Generic_metaclass):
 
 # Note: see compat.py for an explanation
 
-class Field_metaclass(_Generic_metaclass):
-    def __new__(cls,  # type: ignore
+class Field_metaclass(type):
+    def __new__(cls: Type[_T],
                 name,  # type: str
                 bases,  # type: Tuple[type, ...]
                 dct  # type: Dict[str, Any]
                 ):
-        # type: (...) -> Type[scapy.fields.Field[Any, Any]]
+        # type: (...) -> Type[_T]
         dct.setdefault("__slots__", [])
-        newcls = super(Field_metaclass, cls).__new__(cls, name, bases, dct)
-        return newcls
+        newcls = type.__new__(cls, name, bases, dct)
+        return newcls  # type: ignore
 
 
 PacketList_metaclass = Field_metaclass
 
 
-class BasePacket(Gen['scapy.packet.Packet']):
+class BasePacket(Gen['Packet']):
     __slots__ = []  # type: List[str]
 
 
@@ -420,8 +429,9 @@ class BasePacketList(Gen[_T]):
 
 
 class _CanvasDumpExtended(object):
-    def canvas_dump(self, **kwargs):
-        # type: (**Any) -> 'pyx.canvas.canvas'
+    @abc.abstractmethod
+    def canvas_dump(self, layer_shift=0, rebuild=1):
+        # type: (int, int) -> pyx.canvas.canvas
         pass
 
     def psdump(self, filename=None, **kargs):
@@ -440,7 +450,7 @@ class _CanvasDumpExtended(object):
         if filename is None:
             fname = get_temp_file(autoext=kargs.get("suffix", ".eps"))
             canvas.writeEPSfile(fname)
-            if WINDOWS and conf.prog.psreader is None:
+            if WINDOWS and not conf.prog.psreader:
                 os.startfile(fname)
             else:
                 with ContextManagerSubprocess(conf.prog.psreader):
@@ -465,7 +475,7 @@ class _CanvasDumpExtended(object):
         if filename is None:
             fname = get_temp_file(autoext=kargs.get("suffix", ".pdf"))
             canvas.writePDFfile(fname)
-            if WINDOWS and conf.prog.pdfreader is None:
+            if WINDOWS and not conf.prog.pdfreader:
                 os.startfile(fname)
             else:
                 with ContextManagerSubprocess(conf.prog.pdfreader):
@@ -490,7 +500,7 @@ class _CanvasDumpExtended(object):
         if filename is None:
             fname = get_temp_file(autoext=kargs.get("suffix", ".svg"))
             canvas.writeSVGfile(fname)
-            if WINDOWS and conf.prog.svgreader is None:
+            if WINDOWS and not conf.prog.svgreader:
                 os.startfile(fname)
             else:
                 with ContextManagerSubprocess(conf.prog.svgreader):

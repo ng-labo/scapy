@@ -1,17 +1,19 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
-
 # Copyright (C) 2014 Maxence Tury <maxence.tury@ssi.gouv.fr>
-# OpenFlow is an open standard used in SDN deployments.
-# Based on OpenFlow v1.0.1
-# Specifications can be retrieved from https://www.opennetworking.org/
+
+"""
+OpenFlow v1.0.1
+
+OpenFlow is an open standard used in SDN deployments.
+Specifications can be retrieved from https://www.opennetworking.org/
+"""
 
 # scapy.contrib.description = Openflow v1.0
 # scapy.contrib.status = loads
 
-from __future__ import absolute_import
 import struct
 
 
@@ -23,7 +25,6 @@ from scapy.layers.l2 import Ether
 from scapy.layers.inet import TCP
 from scapy.packet import Packet, Raw, bind_bottom_up, bind_top_down
 from scapy.utils import binrepr
-import scapy.modules.six as six
 
 
 # If prereq_autocomplete is True then match prerequisites will be
@@ -714,7 +715,7 @@ class OFPTFeaturesRequest(_ofp_header):
                    IntField("xid", 0)]
 
 
-ofp_action_types_flags = [v for v in six.itervalues(ofp_action_types)
+ofp_action_types_flags = [v for v in ofp_action_types.values()
                           if v != 'OFPAT_VENDOR']
 
 

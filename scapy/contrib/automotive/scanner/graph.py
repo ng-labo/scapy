@@ -1,16 +1,26 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Nils Weiss <nils@we155.de>
-# This program is published under a GPLv2 license
 
 # scapy.contrib.description = Graph library for AutomotiveTestCaseExecutor
 # scapy.contrib.status = library
 
 from collections import defaultdict
 
-from scapy.compat import Union, List, Optional, Dict, Tuple, Set, TYPE_CHECKING
+from scapy.contrib.automotive import log_automotive
 from scapy.contrib.automotive.ecu import EcuState
-from scapy.error import log_interactive
+
+# Typing imports
+from typing import (
+    Union,
+    List,
+    Optional,
+    Dict,
+    Tuple,
+    Set,
+    TYPE_CHECKING,
+)
 
 _Edge = Tuple[EcuState, EcuState]
 
@@ -84,7 +94,7 @@ class Graph(object):
         Get a set of all nodes in this Graph
         :return:
         """
-        return set([n for _, p in self.edges.items() for n in p])
+        return set([n for k, p in self.edges.items() for n in p + [k]])
 
     def render(self, filename="SystemStateGraph.gv", view=True):
         # type: (str, bool) -> None
@@ -97,7 +107,7 @@ class Graph(object):
         try:
             from graphviz import Digraph
         except ImportError:
-            log_interactive.info("Please install graphviz.")
+            log_automotive.info("Please install graphviz.")
             return
 
         ps = Digraph(name="SystemStateGraph",

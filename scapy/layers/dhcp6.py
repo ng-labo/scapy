@@ -1,8 +1,8 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
-
+# Copyright (C) Philippe Biondi <phil@secdev.org>
 # Copyright (C) 2005  Guillaume Valadon <guedou@hongo.wide.ad.jp>
 #                     Arnaud Ebalard <arnaud.ebalard@eads.net>
 
@@ -10,7 +10,6 @@
 DHCPv6: Dynamic Host Configuration Protocol for IPv6. [RFC 3315,8415]
 """
 
-from __future__ import print_function
 import socket
 import struct
 import time
@@ -36,7 +35,6 @@ from scapy.pton_ntop import inet_pton
 from scapy.sendrecv import send
 from scapy.themes import Color
 from scapy.utils6 import in6_addrtovendor, in6_islladdr
-import scapy.modules.six as six
 
 #############################################################################
 # Helpers                                                                  ##
@@ -119,6 +117,7 @@ dhcp6opts = {1: "CLIENTID",
              41: "OPTION_NEW_POSIX_TIMEZONE",  # RFC4833
              42: "OPTION_NEW_TZDB_TIMEZONE",  # RFC4833
              48: "OPTION_LQ_CLIENT_LINK",  # RFC5007
+             56: "OPTION_NTP_SERVER",  # RFC5908
              59: "OPT_BOOTFILE_URL",  # RFC5970
              60: "OPT_BOOTFILE_PARAM",  # RFC5970
              61: "OPTION_CLIENT_ARCH_TYPE",  # RFC5970
@@ -127,6 +126,7 @@ dhcp6opts = {1: "CLIENTID",
              66: "OPTION_RELAY_SUPPLIED_OPTIONS",  # RFC6422
              68: "OPTION_VSS",  # RFC6607
              79: "OPTION_CLIENT_LINKLAYER_ADDR",  # RFC6939
+             103: "OPTION_CAPTIVE_PORTAL",  # RFC8910
              112: "OPTION_MUD_URL",  # RFC8520
              }
 
@@ -176,6 +176,7 @@ dhcp6opts_by_code = {1: "DHCP6OptClientId",
                      # 46: "DHCP6OptLQClientTime",       #RFC5007
                      # 47: "DHCP6OptLQRelayData",        #RFC5007
                      48: "DHCP6OptLQClientLink",  # RFC5007
+                     56: "DHCP6OptNTPServer",  # RFC5908
                      59: "DHCP6OptBootFileUrl",  # RFC5790
                      60: "DHCP6OptBootFileParam",  # RFC5970
                      61: "DHCP6OptClientArchType",  # RFC5970
@@ -184,6 +185,7 @@ dhcp6opts_by_code = {1: "DHCP6OptClientId",
                      66: "DHCP6OptRelaySuppliedOpt",  # RFC6422
                      68: "DHCP6OptVSS",  # RFC6607
                      79: "DHCP6OptClientLinkLayerAddr",  # RFC6939
+                     103: "DHCP6OptCaptivePortal",  # RFC8910
                      112: "DHCP6OptMudUrl",  # RFC8520
                      }
 
@@ -417,7 +419,7 @@ class _OptReqListField(StrLenField):
     islist = 1
 
     def i2h(self, pkt, x):
-        if x is None:
+        if not x:
             return []
         return x
 
@@ -616,7 +618,7 @@ class _UserClassDataField(PacketListField):
             if conf.padding_layer in p:
                 pad = p[conf.padding_layer]
                 remain = pad.load
-                del(pad.underlayer.payload)
+                del pad.underlayer.payload
             else:
                 remain = ""
             lst.append(p)
@@ -962,6 +964,60 @@ class DHCP6OptLQClientLink(_DHCP6OptGuessPayload):  # RFC5007
                                 length_from=lambda pkt: pkt.optlen)]
 
 
+class DHCP6NTPSubOptSrvAddr(Packet):  # RFC5908 sect 4.1
+    name = "DHCP6 NTP Server Address Suboption"
+    fields_desc = [ShortField("optcode", 1),
+                   ShortField("optlen", 16),
+                   IP6Field("addr", "::")]
+
+    def extract_padding(self, s):
+        return b"", s
+
+
+class DHCP6NTPSubOptMCAddr(Packet):  # RFC5908 sect 4.2
+    name = "DHCP6 NTP Multicast Address Suboption"
+    fields_desc = [ShortField("optcode", 2),
+                   ShortField("optlen", 16),
+                   IP6Field("addr", "::")]
+
+    def extract_padding(self, s):
+        return b"", s
+
+
+class DHCP6NTPSubOptSrvFQDN(Packet):  # RFC5908 sect 4.3
+    name = "DHCP6 NTP Server FQDN Suboption"
+    fields_desc = [ShortField("optcode", 3),
+                   FieldLenField("optlen", None, length_of="fqdn"),
+                   DNSStrField("fqdn", "",
+                               length_from=lambda pkt: pkt.optlen)]
+
+    def extract_padding(self, s):
+        return b"", s
+
+
+_ntp_subopts = {1: DHCP6NTPSubOptSrvAddr,
+                2: DHCP6NTPSubOptMCAddr,
+                3: DHCP6NTPSubOptSrvFQDN}
+
+
+def _ntp_subopt_dispatcher(p, **kwargs):
+    cls = conf.raw_layer
+    if len(p) >= 2:
+        o = struct.unpack("!H", p[:2])[0]
+        cls = _ntp_subopts.get(o, conf.raw_layer)
+    return cls(p, **kwargs)
+
+
+class DHCP6OptNTPServer(_DHCP6OptGuessPayload):  # RFC5908
+    name = "DHCP6 NTP Server Option"
+    fields_desc = [ShortEnumField("optcode", 56, dhcp6opts),
+                   FieldLenField("optlen", None, length_of="ntpserver",
+                                 fmt="!H"),
+                   PacketListField("ntpserver", [],
+                                   _ntp_subopt_dispatcher,
+                                   length_from=lambda pkt: pkt.optlen)]
+
+
 class DHCP6OptBootFileUrl(_DHCP6OptGuessPayload):  # RFC5970
     name = "DHCP6 Boot File URL Option"
     fields_desc = [ShortEnumField("optcode", 59, dhcp6opts),
@@ -1027,6 +1083,14 @@ class DHCP6OptClientLinkLayerAddr(_DHCP6OptGuessPayload):  # RFC6939
                                  adjust=lambda pkt, x: x + 2),
                    ShortField("lltype", 1),  # ethernet
                    _LLAddrField("clladdr", ETHER_ANY)]
+
+
+class DHCP6OptCaptivePortal(_DHCP6OptGuessPayload):  # RFC8910
+    name = "DHCP6 Option - Captive-Portal"
+    fields_desc = [ShortEnumField("optcode", 103, dhcp6opts),
+                   FieldLenField("optlen", None, length_of="URI"),
+                   StrLenField("URI", "",
+                               length_from=lambda pkt: pkt.optlen)]
 
 
 class DHCP6OptMudUrl(_DHCP6OptGuessPayload):  # RFC8520
@@ -1719,14 +1783,14 @@ DHCPv6_am.parse_options( dns="2001:500::1035", domain="localdomain, local",
             reqopts = []
             if query.haslayer(DHCP6OptOptReq):  # add only asked ones
                 reqopts = query[DHCP6OptOptReq].reqopts
-                for o, opt in six.iteritems(self.dhcpv6_options):
+                for o, opt in self.dhcpv6_options.items():
                     if o in reqopts:
                         answer /= opt
             else:
                 # advertise everything we have available
                 # Should not happen has clients MUST include
                 # and ORO in requests (sec 18.1.1)   -- arno
-                for o, opt in six.iteritems(self.dhcpv6_options):
+                for o, opt in self.dhcpv6_options.items():
                     answer /= opt
 
         if msgtype == 1:  # SOLICIT (See Sect 17.1 and 17.2 of RFC 3315)
@@ -1868,7 +1932,7 @@ DHCPv6_am.parse_options( dns="2001:500::1035", domain="localdomain, local",
                 resp /= DHCP6OptClientId(duid=client_duid)
 
             # Stack requested options if available
-            for o, opt in six.iteritems(self.dhcpv6_options):
+            for o, opt in self.dhcpv6_options.items():
                 resp /= opt
 
             return resp

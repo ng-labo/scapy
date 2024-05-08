@@ -1,16 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 # This file is part of Scapy
-# Scapy is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 2 of the License, or
-# any later version.
-#
-# Scapy is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Scapy. If not, see <http://www.gnu.org/licenses/>.
+# See https://scapy.net/ for more information
+# Copyright (C) 2009 Jochen Bartl
 
 # scapy.contrib.description = Enhanced Interior Gateway Routing Protocol (EIGRP)
 # scapy.contrib.status = loads
@@ -20,9 +11,7 @@
     ~~~~~~~~~~~~~~~~~~~~~
 
     :version:   2009-08-13
-    :copyright: 2009 by Jochen Bartl
     :e-mail:    lobo@c3a.de / jochen.bartl@gmail.com
-    :license:   GPL v2
 
     :TODO
 
@@ -30,17 +19,12 @@
         * http://trac.secdev.org/scapy/ticket/90
     - Write function for calculating authentication data
 
-    :Known bugs:
-
-        -
-
     :Thanks:
 
     - TLV code derived from the CDP implementation of scapy. (Thanks to Nicolas Bareil and Arnaud Ebalard)
         http://trac.secdev.org/scapy/ticket/18
     - IOS / EIGRP Version Representation FIX by Dirk Loss
 """
-from __future__ import absolute_import
 import socket
 import struct
 

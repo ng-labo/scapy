@@ -1,42 +1,22 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
-# Copyright (C) Philippe Biondi <phil@secdev.org>
-# This program is published under a GPLv2 license
-
-#############################################################################
-#                                                                           #
-#  hsrp.py --- HSRP  protocol support for Scapy                             #
-#                                                                           #
-#  Copyright (C) 2010  Mathieu RENARD mathieu.renard(at)gmail.com           #
-#                                                                           #
-#  This program is free software; you can redistribute it and/or modify it  #
-#  under the terms of the GNU General Public License version 2 as           #
-#  published by the Free Software Foundation; version 2.                    #
-#                                                                           #
-#  This program is distributed in the hope that it will be useful, but      #
-#  WITHOUT ANY WARRANTY; without even the implied warranty of               #
-#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU        #
-#  General Public License for more details.                                 #
-#                                                                           #
-#############################################################################
-# HSRP Version 1
-# Ref. RFC 2281
-# HSRP Version 2
-# Ref. http://www.smartnetworks.jp/2006/02/hsrp_8_hsrp_version_2.html
-##
-# $Log: hsrp.py,v $
-# Revision 0.2  2011/05/01 15:23:34  mrenard
-# Cleanup code
+# See https://scapy.net/ for more information
+# Copyright (C)  Mathieu RENARD <mathieu.renard(at)gmail.com>
 
 """
-HSRP (Hot Standby Router Protocol): proprietary redundancy protocol for Cisco routers.  # noqa: E501
+HSRP (Hot Standby Router Protocol)
+A proprietary redundancy protocol for Cisco routers.
+
+- HSRP Version 1: RFC 2281
+- HSRP Version 2:
+    http://www.smartnetworks.jp/2006/02/hsrp_8_hsrp_version_2.html
 """
 
+from scapy.config import conf
 from scapy.fields import ByteEnumField, ByteField, IPField, SourceIPField, \
     StrFixedLenField, XIntField, XShortField
 from scapy.packet import Packet, bind_layers, bind_bottom_up
 from scapy.layers.inet import DestIPField, UDP
-from scapy.layers.inet6 import DestIP6Field
 
 
 class HSRP(Packet):
@@ -86,4 +66,6 @@ bind_bottom_up(UDP, HSRP, sport=2029)
 bind_layers(UDP, HSRP, dport=1985, sport=1985)
 bind_layers(UDP, HSRP, dport=2029, sport=2029)
 DestIPField.bind_addr(UDP, "224.0.0.2", dport=1985)
-DestIP6Field.bind_addr(UDP, "ff02::66", dport=2029)
+if conf.ipv6_enabled:
+    from scapy.layers.inet6 import DestIP6Field
+    DestIP6Field.bind_addr(UDP, "ff02::66", dport=2029)

@@ -1,27 +1,23 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Philippe Biondi <phil@secdev.org>
-# Modified by Maxence Tury <maxence.tury@ssi.gouv.fr>
-# This program is published under a GPLv2 license
+# Acknowledgment: Maxence Tury <maxence.tury@ssi.gouv.fr>
 
 """
 ASN.1 (Abstract Syntax Notation One)
 """
 
-from __future__ import absolute_import
-from __future__ import print_function
 import random
 
-from datetime import datetime
+from datetime import datetime, timedelta, tzinfo
 from scapy.config import conf
 from scapy.error import Scapy_Exception, warning
 from scapy.volatile import RandField, RandIP, GeneralizedTime
 from scapy.utils import Enum_metaclass, EnumElement, binrepr
 from scapy.compat import plain_str, bytes_encode, chb, orb
-import scapy.modules.six as six
-from scapy.modules.six.moves import range
 
-from scapy.compat import (
+from typing import (
     Any,
     AnyStr,
     Dict,
@@ -30,18 +26,50 @@ from scapy.compat import (
     Optional,
     Tuple,
     Type,
-    TypeVar,
     Union,
-    _Generic_metaclass,
     cast,
     TYPE_CHECKING,
+)
+from typing import (
+    TypeVar,
 )
 
 if TYPE_CHECKING:
     from scapy.asn1.ber import BERcodec_Object
 
+try:
+    from datetime import timezone
+except ImportError:
+    # Python 2 compat - don't bother typing it
+    class UTC(tzinfo):
+        """UTC"""
 
-class RandASN1Object(RandField):
+        def utcoffset(self, dt):  # type: ignore
+            return timedelta(0)
+
+        def tzname(self, dt):  # type: ignore
+            return "UTC"
+
+        def dst(self, dt):  # type: ignore
+            return None
+
+    class timezone(tzinfo):  # type: ignore
+        def __init__(self, delta):  # type: ignore
+            self.delta = delta
+
+        def utcoffset(self, dt):  # type: ignore
+            return self.delta
+
+        def tzname(self, dt):  # type: ignore
+            return None
+
+        def dst(self, dt):  # type: ignore
+            return None
+
+    timezone.utc = UTC()  # type: ignore
+
+
+class RandASN1Object(RandField["ASN1_Object[Any]"]):
     def __init__(self, objlist=None):
         # type: (Optional[List[Type[ASN1_Object[Any]]]]) -> None
         if objlist:
@@ -49,9 +77,7 @@ class RandASN1Object(RandField):
         else:
             self.objlist = [
                 x._asn1_obj
-                for x in six.itervalues(
-                    ASN1_Class_UNIVERSAL.__rdict__  # type: ignore
-                )
+                for x in ASN1_Class_UNIVERSAL.__rdict__.values()  # type: ignore
                 if hasattr(x, "_asn1_obj")
             ]
         self.chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"  # noqa: E501
@@ -68,12 +94,12 @@ class RandASN1Object(RandField):
             z = GeneralizedTime()._fix()
             return o(z)
         elif issubclass(o, ASN1_STRING):
-            z = int(random.expovariate(0.05) + 1)
-            return o("".join(random.choice(self.chars) for _ in range(z)))
+            z1 = int(random.expovariate(0.05) + 1)
+            return o("".join(random.choice(self.chars) for _ in range(z1)))
         elif issubclass(o, ASN1_SEQUENCE) and (n < 10):
-            z = int(random.expovariate(0.08) + 1)
+            z2 = int(random.expovariate(0.08) + 1)
             return o([self.__class__(objlist=self.objlist)._fix(n + 1)
-                      for _ in range(z)])
+                      for _ in range(z2)])
         return ASN1_INTEGER(int(random.gauss(0, 1000)))
 
 
@@ -119,8 +145,7 @@ class ASN1_Codecs_metaclass(Enum_metaclass):
     element_class = ASN1Codec
 
 
-@six.add_metaclass(ASN1_Codecs_metaclass)
-class ASN1_Codecs:
+class ASN1_Codecs(metaclass=ASN1_Codecs_metaclass):
     BER = cast(ASN1Codec, 1)
     DER = cast(ASN1Codec, 2)
     PER = cast(ASN1Codec, 3)
@@ -178,19 +203,19 @@ class ASN1_Class_metaclass(Enum_metaclass):
     element_class = ASN1Tag
 
     # XXX factorise a bit with Enum_metaclass.__new__()
-    def __new__(cls,  # type: ignore
+    def __new__(cls,
                 name,  # type: str
                 bases,  # type: Tuple[type, ...]
                 dct  # type: Dict[str, Any]
                 ):
         # type: (...) -> Type[ASN1_Class]
         for b in bases:
-            for k, v in six.iteritems(b.__dict__):
+            for k, v in b.__dict__.items():
                 if k not in dct and isinstance(v, ASN1Tag):
                     dct[k] = v.clone()
 
         rdict = {}
-        for k, v in six.iteritems(dct):
+        for k, v in dct.items():
             if isinstance(v, int):
                 v = ASN1Tag(k, v)
                 dct[k] = v
@@ -199,16 +224,16 @@ class ASN1_Class_metaclass(Enum_metaclass):
                 rdict[v] = v
         dct["__rdict__"] = rdict
 
-        ncls = type.__new__(cls, name, bases, dct)  # type: Type[ASN1_Class]
-        for v in six.itervalues(ncls.__dict__):
+        ncls = cast('Type[ASN1_Class]',
+                    type.__new__(cls, name, bases, dct))
+        for v in ncls.__dict__.values():
             if isinstance(v, ASN1Tag):
                 # overwrite ASN1Tag contexts, even cloned ones
                 v.context = ncls
         return ncls
 
 
-@six.add_metaclass(ASN1_Class_metaclass)
-class ASN1_Class:
+class ASN1_Class(metaclass=ASN1_Class_metaclass):
     pass
 
 
@@ -250,20 +275,22 @@ class ASN1_Class_UNIVERSAL(ASN1_Class):
     BMP_STRING = cast(ASN1Tag, 30)
     IPADDRESS = cast(ASN1Tag, 0 | 0x40)     # application-specific encoding
     COUNTER32 = cast(ASN1Tag, 1 | 0x40)     # application-specific encoding
+    COUNTER64 = cast(ASN1Tag, 6 | 0x40)     # application-specific encoding
     GAUGE32 = cast(ASN1Tag, 2 | 0x40)       # application-specific encoding
     TIME_TICKS = cast(ASN1Tag, 3 | 0x40)    # application-specific encoding
 
 
-class ASN1_Object_metaclass(_Generic_metaclass):
-    def __new__(cls,  # type: ignore
+class ASN1_Object_metaclass(type):
+    def __new__(cls,
                 name,  # type: str
                 bases,  # type: Tuple[type, ...]
                 dct  # type: Dict[str, Any]
                 ):
         # type: (...) -> Type[ASN1_Object[Any]]
-        c = super(ASN1_Object_metaclass, cls).__new__(
-            cls, name, bases, dct
-        )  # type: Type[ASN1_Object[Any]]
+        c = cast(
+            'Type[ASN1_Object[Any]]',
+            super(ASN1_Object_metaclass, cls).__new__(cls, name, bases, dct)
+        )
         try:
             c.tag.register_asn1_object(c)
         except Exception:
@@ -274,8 +301,7 @@ class ASN1_Object_metaclass(_Generic_metaclass):
 _K = TypeVar('_K')
 
 
-@six.add_metaclass(ASN1_Object_metaclass)
-class ASN1_Object(Generic[_K]):
+class ASN1_Object(Generic[_K], metaclass=ASN1_Object_metaclass):
     tag = ASN1_Class_UNIVERSAL.ANY
 
     def __init__(self, val):
@@ -329,6 +355,17 @@ class ASN1_Object(Generic[_K]):
     def __ne__(self, other):
         # type: (Any) -> bool
         return bool(self.val != other)
+
+    def command(self, json=False):
+        # type: (bool) -> Union[Dict[str, str], str]
+        if json:
+            if isinstance(self.val, bytes):
+                val = self.val.decode("utf-8", errors="backslashreplace")
+            else:
+                val = repr(self.val)
+            return {"type": self.__class__.__name__, "value": val}
+        else:
+            return "%s(%s)" % (self.__class__.__name__, repr(self.val))
 
 
 #######################
@@ -420,7 +457,7 @@ class ASN1_BIT_STRING(ASN1_Object[str]):
             self.val_readable = cast(bytes, val)  # type: ignore
 
     def __setattr__(self, name, value):
-        # type: (str, str) -> None
+        # type: (str, Any) -> None
         if name == "val_readable":
             if isinstance(value, (str, bytes)):
                 val = "".join(binrepr(orb(x)).zfill(8) for x in value)
@@ -456,6 +493,15 @@ class ASN1_BIT_STRING(ASN1_Object[str]):
                     "is not supported.")
         else:
             object.__setattr__(self, name, value)
+
+    def set(self, i, val):
+        # type: (int, str) -> None
+        """
+        Sets bit 'i' to value 'val' (starting from 0)
+        """
+        val = str(val)
+        assert val in ['0', '1']
+        self.val = self.val[:i] + val + self.val[i + 1:]
 
     def __repr__(self):
         # type: () -> str
@@ -529,45 +575,128 @@ class ASN1_IA5_STRING(ASN1_STRING):
     tag = ASN1_Class_UNIVERSAL.IA5_STRING
 
 
-class ASN1_UTC_TIME(ASN1_STRING):
-    tag = ASN1_Class_UNIVERSAL.UTC_TIME
+class ASN1_GENERAL_STRING(ASN1_STRING):
+    tag = ASN1_Class_UNIVERSAL.GENERAL_STRING
+
+
+class ASN1_GENERALIZED_TIME(ASN1_STRING):
+    """
+    Improved version of ASN1_GENERALIZED_TIME, properly handling time zones and
+    all string representation formats defined by ASN.1. These are:
+
+    1. Local time only:                        YYYYMMDDHH[MM[SS[.fff]]]
+    2. Universal time (UTC time) only:         YYYYMMDDHH[MM[SS[.fff]]]Z
+    3. Difference between local and UTC times: YYYYMMDDHH[MM[SS[.fff]]]+-HHMM
+
+    It also handles ASN1_UTC_TIME, which allows:
+
+    1. Universal time (UTC time) only:         YYMMDDHHMM[SS[.fff]]Z
+    2. Difference between local and UTC times: YYMMDDHHMM[SS[.fff]]+-HHMM
+
+    Note the differences: Year is only two digits, minutes are not optional and
+    there is no milliseconds.
+    """
+    tag = ASN1_Class_UNIVERSAL.GENERALIZED_TIME
+    pretty_time = None
+
+    def __init__(self, val):
+        # type: (Union[str, datetime]) -> None
+        if isinstance(val, datetime):
+            self.__setattr__("datetime", val)
+        else:
+            super(ASN1_GENERALIZED_TIME, self).__init__(val)
 
     def __setattr__(self, name, value):
-        # type: (str, str) -> None
+        # type: (str, Any) -> None
         if isinstance(value, bytes):
             value = plain_str(value)
+
         if name == "val":
+            formats = {
+                10: "%Y%m%d%H",
+                12: "%Y%m%d%H%M",
+                14: "%Y%m%d%H%M%S"
+            }
+            dt = None  # type: Optional[datetime]
+            try:
+                if value[-1] == "Z":
+                    str, ofs = value[:-1], value[-1:]
+                elif value[-5] in ("+", "-"):
+                    str, ofs = value[:-5], value[-5:]
+                elif isinstance(self, ASN1_UTC_TIME):
+                    raise ValueError()
+                else:
+                    str, ofs = value, ""
+
+                if isinstance(self, ASN1_UTC_TIME) and len(str) >= 10:
+                    fmt = "%y" + formats[len(str) + 2][2:]
+                elif str[-4] == ".":
+                    fmt = formats[len(str) - 4] + ".%f"
+                else:
+                    fmt = formats[len(str)]
+
+                dt = datetime.strptime(str, fmt)
+                if ofs == 'Z':
+                    dt = dt.replace(tzinfo=timezone.utc)
+                elif ofs:
+                    sign = -1 if ofs[0] == "-" else 1
+                    ofs = datetime.strptime(ofs[1:], "%H%M")
+                    delta = timedelta(hours=ofs.hour * sign,
+                                      minutes=ofs.minute * sign)
+                    dt = dt.replace(tzinfo=timezone(delta))
+            except Exception:
+                dt = None
+
             pretty_time = None
-            if isinstance(self, ASN1_GENERALIZED_TIME):
-                _len = 15
-                self._format = "%Y%m%d%H%M%S"
-            else:
-                _len = 13
-                self._format = "%y%m%d%H%M%S"
-            _nam = self.tag._asn1_obj.__name__[4:].lower()
-            if (isinstance(value, str) and
-                    len(value) == _len and value[-1] == "Z"):
-                dt = datetime.strptime(value[:-1], self._format)
-                pretty_time = dt.strftime("%b %d %H:%M:%S %Y GMT")
-            else:
+            if dt is None:
+                _nam = self.tag._asn1_obj.__name__[5:]
+                _nam = _nam.lower().replace("_", " ")
                 pretty_time = "%s [invalid %s]" % (value, _nam)
+            else:
+                pretty_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                if dt.microsecond:
+                    pretty_time += dt.strftime(".%f")[:4]
+                if dt.tzinfo == timezone.utc:
+                    pretty_time += dt.strftime(" UTC")
+                elif dt.tzinfo is not None:
+                    if dt.tzinfo.utcoffset(dt) is not None:
+                        pretty_time += dt.strftime(" %z")
+
             ASN1_STRING.__setattr__(self, "pretty_time", pretty_time)
+            ASN1_STRING.__setattr__(self, "datetime", dt)
             ASN1_STRING.__setattr__(self, name, value)
         elif name == "pretty_time":
             print("Invalid operation: pretty_time rewriting is not supported.")
+        elif name == "datetime":
+            ASN1_STRING.__setattr__(self, name, value)
+            if isinstance(value, datetime):
+                yfmt = "%y" if isinstance(self, ASN1_UTC_TIME) else "%Y"
+                if value.microsecond:
+                    str = value.strftime(yfmt + "%m%d%H%M%S.%f")[:-3]
+                else:
+                    str = value.strftime(yfmt + "%m%d%H%M%S")
+
+                if value.tzinfo == timezone.utc:
+                    str = str + "Z"
+                else:
+                    str = str + value.strftime("%z")  # empty if naive
+
+                ASN1_STRING.__setattr__(self, "val", str)
+            else:
+                ASN1_STRING.__setattr__(self, "val", None)
         else:
             ASN1_STRING.__setattr__(self, name, value)
 
     def __repr__(self):
         # type: () -> str
         return "%s %s" % (
-            self.pretty_time,  # type: ignore
-            super(ASN1_UTC_TIME, self).__repr__()
+            self.pretty_time,
+            super(ASN1_GENERALIZED_TIME, self).__repr__()
         )
 
 
-class ASN1_GENERALIZED_TIME(ASN1_UTC_TIME):
-    tag = ASN1_Class_UNIVERSAL.GENERALIZED_TIME
+class ASN1_UTC_TIME(ASN1_GENERALIZED_TIME):
+    tag = ASN1_Class_UNIVERSAL.UTC_TIME
 
 
 class ASN1_ISO646_STRING(ASN1_STRING):
@@ -603,6 +732,10 @@ class ASN1_IPADDRESS(ASN1_STRING):
 
 class ASN1_COUNTER32(ASN1_INTEGER):
     tag = ASN1_Class_UNIVERSAL.COUNTER32
+
+
+class ASN1_COUNTER64(ASN1_INTEGER):
+    tag = ASN1_Class_UNIVERSAL.COUNTER64
 
 
 class ASN1_GAUGE32(ASN1_INTEGER):

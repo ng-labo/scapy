@@ -1,17 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 # This file is part of Scapy
-# Scapy is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 2 of the License, or
-# any later version.
-#
-# Scapy is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Scapy. If not, see <http://www.gnu.org/licenses/>.
-
+# See https://scapy.net/ for more information
 # author: <jellch@harris.com>
 
 # scapy.contrib.description = CACE Per-Packet Information (PPI) Geolocation
@@ -22,7 +11,6 @@
 PPI-GEOLOCATION tags
 """
 
-from __future__ import absolute_import
 import functools
 import struct
 
@@ -34,8 +22,6 @@ from scapy.fields import ByteField, ConditionalField, Field, FlagsField, \
     UTCTimeField, XLEIntField, SignedByteField, XLEShortField
 from scapy.layers.ppi import PPI_Hdr, PPI_Element
 from scapy.error import warning
-import scapy.modules.six as six
-from scapy.modules.six.moves import range
 
 CURR_GEOTAG_VER = 2  # Major revision of specification
 
@@ -265,7 +251,7 @@ class HCSIAppField(StrFixedLenField):
 
 def _FlagsList(myfields):
     flags = ["Reserved%02d" % i for i in range(32)]
-    for i, value in six.iteritems(myfields):
+    for i, value in myfields.items():
         flags[i] = value
     return flags
 
@@ -292,7 +278,7 @@ _hcsi_vector_char_flags = _FlagsList({
     8: "GPS Derived",
     9: "INS Derived",
     10: "Compass Derived",
-    11: "Acclerometer Derived",
+    11: "Accelerometer Derived",
     12: "Human Derived",
 })
 
@@ -372,7 +358,7 @@ class _Geotag_metaclass(Packet_metaclass):
         return x
 
 
-class HCSIPacket(six.with_metaclass(_Geotag_metaclass, PPI_Element)):
+class HCSIPacket(PPI_Element, metaclass=_Geotag_metaclass):
     def post_build(self, p, pay):
         if self.geotag_len is None:
             sl_g = struct.pack('<H', len(p))

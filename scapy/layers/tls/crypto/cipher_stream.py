@@ -1,16 +1,15 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
+# See https://scapy.net/ for more information
 # Copyright (C) 2007, 2008, 2009 Arnaud Ebalard
 #               2015, 2016, 2017 Maxence Tury
-# This program is published under a GPLv2 license
 
 """
 Stream ciphers.
 """
 
-from __future__ import absolute_import
 from scapy.config import conf
 from scapy.layers.tls.crypto.common import CipherError
-import scapy.modules.six as six
 
 if conf.crypto_valid:
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms
@@ -35,7 +34,7 @@ class _StreamCipherMetaclass(type):
         return the_class
 
 
-class _StreamCipher(six.with_metaclass(_StreamCipherMetaclass, object)):
+class _StreamCipher(metaclass=_StreamCipherMetaclass):
     type = "stream"
 
     def __init__(self, key=None):
@@ -81,13 +80,13 @@ class _StreamCipher(six.with_metaclass(_StreamCipherMetaclass, object)):
         super(_StreamCipher, self).__setattr__(name, val)
 
     def encrypt(self, data):
-        if False in six.itervalues(self.ready):
+        if False in self.ready.values():
             raise CipherError(data)
         self._enc_updated_with += data
         return self.encryptor.update(data)
 
     def decrypt(self, data):
-        if False in six.itervalues(self.ready):
+        if False in self.ready.values():
             raise CipherError(data)
         self._dec_updated_with += data
         return self.decryptor.update(data)

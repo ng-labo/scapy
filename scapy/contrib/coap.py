@@ -1,19 +1,6 @@
-# This file is part of Scapy.
-# See http://www.secdev.org/projects/scapy for more information.
-#
-# Scapy is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 2 of the License, or
-# (at your option) any later version.
-#
-# Scapy is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Scapy.  If not, see <http://www.gnu.org/licenses/>.
-#
+# SPDX-License-Identifier: GPL-2.0-or-later
+# This file is part of Scapy
+# See https://scapy.net/ for more information
 # Copyright (C) 2016 Anmol Sarma <me@anmolsarma.in>
 
 # scapy.contrib.description = Constrained Application Protocol (CoAP)
@@ -120,7 +107,7 @@ def _get_abs_val(val, ext_val):
     if val >= 15:
         warning("Invalid Option Length or Delta %d" % val)
     if val == 14:
-        return 269 + struct.unpack('H', ext_val)[0]
+        return 269 + struct.unpack('!H', ext_val)[0]
     if val == 13:
         return 13 + struct.unpack('B', ext_val)[0]
     return val
@@ -133,14 +120,14 @@ def _get_opt_val_size(pkt):
 class _CoAPOpt(Packet):
     fields_desc = [BitField("delta", 0, 4),
                    BitField("len", 0, 4),
-                   StrLenField("delta_ext", None, length_from=_get_delta_ext_size),  # noqa: E501
-                   StrLenField("len_ext", None, length_from=_get_len_ext_size),
-                   StrLenField("opt_val", None, length_from=_get_opt_val_size)]
+                   StrLenField("delta_ext", "", length_from=_get_delta_ext_size),  # noqa: E501
+                   StrLenField("len_ext", "", length_from=_get_len_ext_size),
+                   StrLenField("opt_val", "", length_from=_get_opt_val_size)]
 
     @staticmethod
     def _populate_extended(val):
         if val >= 269:
-            return struct.pack('H', val - 269), 14
+            return struct.pack('!H', val - 269), 14
         if val >= 13:
             return struct.pack('B', val - 13), 13
         return None, val

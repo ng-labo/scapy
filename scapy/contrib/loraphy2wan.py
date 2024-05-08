@@ -1,35 +1,44 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 # This file is part of Scapy
-# Scapy is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 2 of the License, or
-# any later version.
-#
-# Scapy is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Scapy. If not, see <http://www.gnu.org/licenses/>.
+# See https://scapy.net/ for more information
+# Copyright (C) 2020  Sebastien Dudek (@FlUxIuS)
 
 # scapy.contrib.description = LoRa PHY to WAN Layer
 # scapy.contrib.status = loads
 
 """
-Copyright (C) 2020  Sebastien Dudek (@FlUxIuS)
-initially developed @PentHertz
+LoRa PHY to WAN Layer
+
+Initially developed @PentHertz
 and improved at @Trend Micro
 
 Spec: lorawantm_specification v1.1
 """
 
 from scapy.packet import Packet
-from scapy.fields import BitField, ByteEnumField, ByteField, \
-    ConditionalField, IntField, LEShortField, PacketListField, \
-    StrFixedLenField, X3BytesField, XByteField, XIntField, \
-    XShortField, BitFieldLenField, LEX3BytesField, XBitField, \
-    BitEnumField, XLEIntField, StrField, PacketField, \
-    MultipleTypeField
+from scapy.fields import (
+    BitEnumField,
+    BitField,
+    BitFieldLenField,
+    ByteEnumField,
+    ByteField,
+    ConditionalField,
+    IntField,
+    LEShortField,
+    MayEnd,
+    MultipleTypeField,
+    PacketField,
+    PacketListField,
+    StrField,
+    StrFixedLenField,
+    X3BytesField,
+    XBitField,
+    XByteField,
+    XIntField,
+    XLE3BytesField,
+    XLEIntField,
+    XShortField,
+)
 
 
 class FCtrl_DownLink(Packet):
@@ -71,7 +80,7 @@ class FCtrl_UpLink(Packet):
 class DevAddrElem(Packet):
     name = "DevAddrElem"
     fields_desc = [XByteField("NwkID", 0x0),
-                   LEX3BytesField("NwkAddr", b"\x00" * 3)]
+                   XLE3BytesField("NwkAddr", b"\x00" * 3)]
 
 
 CIDs_up = {0x01: "ResetInd",
@@ -600,8 +609,8 @@ class Join_Request(Packet):
 class Join_Accept(Packet):
     name = "Join_Accept"
     dcflist = False
-    fields_desc = [LEX3BytesField("JoinAppNonce", 0),
-                   LEX3BytesField("NetID", 0),
+    fields_desc = [XLE3BytesField("JoinAppNonce", 0),
+                   XLE3BytesField("NetID", 0),
                    XLEIntField("DevAddr", 0),
                    DLsettings,
                    XByteField("RxDelay", 0),
@@ -700,9 +709,9 @@ class PHYPayload(Packet):
     name = "PHYPayload"
     fields_desc = [MHDR,
                    MACPayload,
-                   ConditionalField(XIntField("MIC", 0),
-                                    lambda pkt:(pkt.MType != 0b001 or
-                                                LoRa.encrypted is False))]
+                   MayEnd(ConditionalField(XIntField("MIC", 0),
+                                           lambda pkt: (pkt.MType != 0b001 or
+                                                        LoRa.encrypted is False)))]
 
 
 class LoRa(Packet):  # default frame (unclear specs => taken from https://www.ncbi.nlm.nih.gov/pmc/articles/PMC5677147/)  # noqa: E501

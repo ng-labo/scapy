@@ -1,10 +1,9 @@
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
-# Copyright (C) 2019 Gabriel Potter <gabriel@potter.fr>
+# See https://scapy.net/ for more information
 # Copyright (C) 2012 Luca Invernizzi <invernizzi.l@gmail.com>
 # Copyright (C) 2012 Steeve Barbeau <http://www.sbarbeau.fr>
-
-# This program is published under a GPLv2 license
+# Copyright (C) 2019 Gabriel Potter <gabriel[]potter[]fr>
 
 """
 HTTP 1.0 layer.
@@ -20,7 +19,7 @@ Or (console only)::
 Note that this layer ISN'T loaded by default, as quite experimental for now.
 
 To follow HTTP packets streams = group packets together to get the
-whole request/answer, use ``TCPSession`` as:
+whole request/answer, use ``TCPSession`` as::
 
     >>> sniff(session=TCPSession)  # Live on-the-flow session
     >>> sniff(offline="./http_chunk.pcap", session=TCPSession)  # pcap
@@ -29,18 +28,18 @@ This will decode HTTP packets using ``Content_Length`` or chunks,
 and will also decompress the packets when needed.
 Note: on failure, decompression will be ignored.
 
-You can turn auto-decompression/auto-compression off with:
+You can turn auto-decompression/auto-compression off with::
 
     >>> conf.contribs["http"]["auto_compression"] = False
 
 (Defaults to True)
 """
 
-# This file is a modified version of the former scapy_http plugin.
+# This file is a rewritten version of the former scapy_http plugin.
 # It was reimplemented for scapy 2.4.3+ using sessions, stream handling.
 # Original Authors : Steeve Barbeau, Luca Invernizzi
-# Originally published under a GPLv2 license
 
+import gzip
 import io
 import os
 import re
@@ -48,9 +47,8 @@ import socket
 import struct
 import subprocess
 
-from scapy.base_classes import Net
-from scapy.compat import plain_str, bytes_encode, \
-    gzip_compress, gzip_decompress
+from scapy.compat import plain_str, bytes_encode
+
 from scapy.config import conf
 from scapy.consts import WINDOWS
 from scapy.error import warning, log_loading
@@ -61,13 +59,17 @@ from scapy.utils import get_temp_file, ContextManagerSubprocess
 
 from scapy.layers.inet import TCP, TCP_client
 
-from scapy.modules import six
-
 try:
     import brotli
     _is_brotli_available = True
 except ImportError:
     _is_brotli_available = False
+
+try:
+    import lzw
+    _is_lzw_available = True
+except ImportError:
+    _is_lzw_available = False
 
 try:
     import zstandard
@@ -263,12 +265,14 @@ def _dissect_headers(obj, s):
             continue
         obj.setfieldval(f.name, value)
     if headers:
-        headers = dict(six.itervalues(headers))
+        headers = dict(headers.values())
         obj.setfieldval('Unknown_Headers', headers)
     return first_line, body
 
 
 class _HTTPContent(Packet):
+    __slots__ = ["_original_len"]
+
     # https://developer.mozilla.org/fr/docs/Web/HTTP/Headers/Transfer-Encoding
     def _get_encodings(self):
         encodings = []
@@ -285,6 +289,7 @@ class _HTTPContent(Packet):
         return b"HTTP1"
 
     def post_dissect(self, s):
+        self._original_len = len(s)
         if not conf.contribs["http"]["auto_compression"]:
             return s
         encodings = self._get_encodings()
@@ -313,10 +318,15 @@ class _HTTPContent(Packet):
                 import zlib
                 s = zlib.decompress(s)
             elif "gzip" in encodings:
-                s = gzip_decompress(s)
+                s = gzip.decompress(s)
             elif "compress" in encodings:
-                import lzw
-                s = lzw.decompress(s)
+                if _is_lzw_available:
+                    s = lzw.decompress(s)
+                else:
+                    log_loading.info(
+                        "Can't import lzw. compress decompression "
+                        "will be ignored !"
+                    )
             elif "br" in encodings:
                 if _is_brotli_available:
                     s = brotli.decompress(s)
@@ -352,10 +362,15 @@ class _HTTPContent(Packet):
             import zlib
             pay = zlib.compress(pay)
         elif "gzip" in encodings:
-            pay = gzip_compress(pay)
+            pay = gzip.compress(pay)
         elif "compress" in encodings:
-            import lzw
-            pay = lzw.compress(pay)
+            if _is_lzw_available:
+                pay = lzw.compress(pay)
+            else:
+                log_loading.info(
+                    "Can't import lzw. compress compression "
+                    "will be ignored !"
+                )
         elif "br" in encodings:
             if _is_brotli_available:
                 pay = brotli.compress(pay)
@@ -386,7 +401,7 @@ class _HTTPContent(Packet):
             return self.raw_packet_cache
         p = b""
         # Walk all the fields, in order
-        for f in self.fields_desc:
+        for i, f in enumerate(self.fields_desc):
             if f.name == "Unknown_Headers":
                 continue
             # Get the field value
@@ -394,27 +409,21 @@ class _HTTPContent(Packet):
             if not val:
                 # Not specified. Skip
                 continue
-            if f.name not in ['Method', 'Path', 'Reason_Phrase',
-                              'Http_Version', 'Status_Code']:
+
+            if i >= 3:
                 val = _header_line(f.real_name, val)
             # Fields used in the first line have a space as a separator,
             # whereas headers are terminated by a new line
-            if isinstance(self, HTTPRequest):
-                if f.name in ['Method', 'Path']:
-                    separator = b' '
-                else:
-                    separator = b'\r\n'
-            elif isinstance(self, HTTPResponse):
-                if f.name in ['Http_Version', 'Status_Code']:
-                    separator = b' '
-                else:
-                    separator = b'\r\n'
+            if i <= 1:
+                separator = b' '
+            else:
+                separator = b'\r\n'
             # Add the field into the packet
             p = f.addfield(self, p, val + separator)
         # Handle Unknown_Headers
         if self.Unknown_Headers:
             headers_text = b""
-            for name, value in six.iteritems(self.Unknown_Headers):
+            for name, value in self.Unknown_Headers.items():
                 headers_text += _header_line(name, value) + b"\r\n"
             p = self.get_field("Unknown_Headers").addfield(
                 self, p, headers_text
@@ -428,6 +437,8 @@ class _HTTPContent(Packet):
     def guess_payload_class(self, payload):
         """Detect potential payloads
         """
+        if not hasattr(self, "Connection"):
+            return super(_HTTPContent, self).guess_payload_class(payload)
         if self.Connection and b"Upgrade" in self.Connection:
             from scapy.contrib.http2 import H2Frame
             return H2Frame
@@ -552,6 +563,19 @@ class HTTP(Packet):
     name = "HTTP 1"
     fields_desc = []
     show_indent = 0
+    clsreq = HTTPRequest
+    clsresp = HTTPResponse
+    hdr = b"HTTP"
+    reqmethods = b"|".join([
+        b"OPTIONS",
+        b"GET",
+        b"HEAD",
+        b"POST",
+        b"PUT",
+        b"DELETE",
+        b"TRACE",
+        b"CONNECT",
+    ])
 
     @classmethod
     def dispatch_hook(cls, _pkt=None, *args, **kargs):
@@ -580,24 +604,32 @@ class HTTP(Packet):
 
     # tcp_reassemble is used by TCPSession in session.py
     @classmethod
-    def tcp_reassemble(cls, data, metadata):
+    def tcp_reassemble(cls, data, metadata, _):
         detect_end = metadata.get("detect_end", None)
         is_unknown = metadata.get("detect_unknown", True)
+        # General idea of the following is explained at
+        # https://datatracker.ietf.org/doc/html/rfc2616#section-4.4
         if not detect_end or is_unknown:
             metadata["detect_unknown"] = False
-            http_packet = HTTP(data)
+            http_packet = cls(data)
             # Detect packing method
             if not isinstance(http_packet.payload, _HTTPContent):
                 return http_packet
+            is_response = isinstance(http_packet.payload, cls.clsresp)
+            # Packets may have a Content-Length we must honnor
             length = http_packet.Content_Length
-            if length is not None:
+            # Heuristic to try and detect instant HEAD responses, as those include a
+            # Content-Length that must not be honored.
+            if is_response and data.endswith(b"\r\n\r\n"):
+                detect_end = lambda _: True
+            elif length is not None:
                 # The packet provides a Content-Length attribute: let's
                 # use it. When the total size of the frags is high enough,
                 # we have the packet
                 length = int(length)
                 # Subtract the length of the "HTTP*" layer
                 if http_packet.payload.payload or length == 0:
-                    http_length = len(data) - len(http_packet.payload.payload)
+                    http_length = len(data) - http_packet.payload._original_len
                     detect_end = lambda dat: len(dat) - http_length >= length
                 else:
                     # The HTTP layer isn't fully received.
@@ -605,14 +637,13 @@ class HTTP(Packet):
                     metadata["detect_unknown"] = True
             else:
                 # It's not Content-Length based. It could be chunked
-                encodings = http_packet[HTTP].payload._get_encodings()
+                encodings = http_packet[cls].payload._get_encodings()
                 chunked = ("chunked" in encodings)
-                is_response = isinstance(http_packet.payload, HTTPResponse)
                 if chunked:
                     detect_end = lambda dat: dat.endswith(b"0\r\n\r\n")
                 # HTTP Requests that do not have any content,
-                # end with a double CRLF
-                elif isinstance(http_packet.payload, HTTPRequest):
+                # end with a double CRLF. Same for HEAD responses
+                elif isinstance(http_packet.payload, cls.clsreq):
                     detect_end = lambda dat: dat.endswith(b"\r\n\r\n")
                     # In case we are handling a HTTP Request,
                     # we want to continue assessing the data,
@@ -634,7 +665,7 @@ class HTTP(Packet):
                 return http_packet
         else:
             if detect_end(data):
-                http_packet = HTTP(data)
+                http_packet = cls(data)
                 return http_packet
 
     def guess_payload_class(self, payload):
@@ -643,20 +674,20 @@ class HTTP(Packet):
         """
         try:
             prog = re.compile(
-                br"^(?:OPTIONS|GET|HEAD|POST|PUT|DELETE|TRACE|CONNECT) "
-                br"(?:.+?) "
-                br"HTTP/\d\.\d$"
+                br"^(?:" + self.reqmethods + br") " +
+                br"(?:.+?) " +
+                self.hdr + br"/\d\.\d$"
             )
             crlfIndex = payload.index(b"\r\n")
             req = payload[:crlfIndex]
             result = prog.match(req)
             if result:
-                return HTTPRequest
+                return self.clsreq
             else:
-                prog = re.compile(br"^HTTP/\d\.\d \d\d\d .*$")
+                prog = re.compile(b"^" + self.hdr + br"/\d\.\d \d\d\d .*$")
                 result = prog.match(req)
                 if result:
-                    return HTTPResponse
+                    return self.clsresp
         except ValueError:
             # Anything that isn't HTTP but on port 80
             pass
@@ -665,7 +696,7 @@ class HTTP(Packet):
 
 def http_request(host, path="/", port=80, timeout=3,
                  display=False, verbose=0,
-                 raw=False, iptables=False, iface=None,
+                 raw=False, iface=None,
                  **headers):
     """Util to perform an HTTP request, using the TCP_client.
 
@@ -677,15 +708,11 @@ def http_request(host, path="/", port=80, timeout=3,
     :param raw: opens a raw socket instead of going through the OS's TCP
                 socket. Scapy will then use its own TCP client.
                 Careful, the OS might cancel the TCP connection with RST.
-    :param iptables: when raw is enabled, this calls iptables to temporarily
-                     prevent the OS from sending TCP RST to the host IP.
-                     On Linux, you'll almost certainly need this.
     :param iface: interface to use. Changing this turns on "raw"
     :param headers: any additional headers passed to the request
 
     :returns: the HTTPResponse packet
     """
-    from scapy.sessions import TCPSession
     http_headers = {
         "Accept_Encoding": b'gzip, deflate',
         "Cache_Control": b'no-cache',
@@ -702,11 +729,6 @@ def http_request(host, path="/", port=80, timeout=3,
     if iface is not None:
         raw = True
     if raw:
-        # Use TCP_client on a raw socket
-        iptables_rule = "iptables -%c INPUT -s %s -p tcp --sport 80 -j DROP"
-        if iptables:
-            host = str(Net(host))
-            assert(os.system(iptables_rule % ('A', host)) == 0)
         sock = TCP_client.tcplink(HTTP, host, port, debug=verbose,
                                   iface=iface)
     else:
@@ -718,15 +740,11 @@ def http_request(host, path="/", port=80, timeout=3,
     try:
         ans = sock.sr1(
             req,
-            session=TCPSession(app=True),
             timeout=timeout,
             verbose=verbose
         )
     finally:
         sock.close()
-        if raw and iptables:
-            host = str(Net(host))
-            assert(os.system(iptables_rule % ('D', host)) == 0)
     if ans:
         if display:
             if Raw not in ans:

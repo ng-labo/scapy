@@ -1,9 +1,7 @@
-#! /usr/bin/env python
-
+# SPDX-License-Identifier: GPL-2.0-only
 # This file is part of Scapy
-# See http://www.secdev.org/projects/scapy for more information
+# See https://scapy.net/ for more information
 # Copyright (C) Nils Weiss <nils@we155.de>
-# This program is published under a GPLv2 license
 
 # scapy.contrib.description = Helper class for tracking Ecu states (Ecu)
 # scapy.contrib.status = loads
@@ -11,20 +9,33 @@
 import time
 import random
 import copy
+import itertools
 
 from collections import defaultdict
 from types import GeneratorType
 from threading import Lock
 
-from scapy.compat import Any, Union, Iterable, Callable, List, Optional, \
-    Tuple, Type, cast, Dict, orb
+from scapy.compat import orb
 from scapy.packet import Raw, Packet
 from scapy.plist import PacketList
 from scapy.sessions import DefaultSession
 from scapy.ansmachine import AnsweringMachine
-from scapy.config import conf
 from scapy.supersocket import SuperSocket
 from scapy.error import Scapy_Exception
+
+# Typing imports
+from typing import (
+    Any,
+    Union,
+    Iterable,
+    Callable,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    cast,
+    Dict,
+)
 
 
 __all__ = ["EcuState", "Ecu", "EcuResponse", "EcuSession",
@@ -37,15 +48,52 @@ class EcuState(object):
     example UDS or GMLAN.
     A EcuState supports comparison and serialization (command()).
     """
+    __slots__ = ["__dict__", "__cache__"]
+
     def __init__(self, **kwargs):
         # type: (Any) -> None
+        self.__cache__ = None  # type: Optional[Tuple[List[EcuState], List[Any]]]  # noqa: E501
         for k, v in kwargs.items():
             if isinstance(v, GeneratorType):
                 v = list(v)
-            self.__setattr__(k, v)
+            self.__setitem__(k, v)
+
+    def _expand(self):
+        # type: () -> List[EcuState]
+        values = list(self.__dict__.values())
+        keys = list(self.__dict__.keys())
+        if self.__cache__ is None or self.__cache__[1] != values:
+            expanded = list()
+            for x in itertools.product(*[self._flatten(v) for v in values]):
+                kwargs = {}
+                for i, k in enumerate(keys):
+                    if x[i] is None:
+                        continue
+                    kwargs[k] = x[i]
+                expanded.append(EcuState(**kwargs))
+            self.__cache__ = (expanded, values)
+        return self.__cache__[0]
+
+    @staticmethod
+    def _flatten(x):
+        # type: (Any) -> List[Any]
+        if isinstance(x, (str, bytes)):
+            return [x]
+        elif hasattr(x, "__iter__") and hasattr(x, "__len__") and len(x) == 1:
+            return list(*x)
+        elif not hasattr(x, "__iter__"):
+            return [x]
+        flattened = list()
+        for y in x:
+            if hasattr(x, "__iter__"):
+                flattened += EcuState._flatten(y)
+            else:
+                flattened += [y]
+        return flattened
 
     def __delitem__(self, key):
         # type: (str) -> None
+        self.__cache__ = None
         del self.__dict__[key]
 
     def __len__(self):
@@ -58,6 +106,7 @@ class EcuState(object):
 
     def __setitem__(self, key, value):
         # type: (str, Any) -> None
+        self.__cache__ = None
         self.__dict__[key] = value
 
     def __repr__(self):
@@ -80,14 +129,7 @@ class EcuState(object):
         # type: (EcuState) -> bool
         if not isinstance(item, EcuState):
             return False
-        if len(self.__dict__) != len(item.__dict__):
-            return False
-        try:
-            return all(ov == sv or (hasattr(sv, "__iter__") and ov in sv)
-                       for sv, ov in
-                       zip(self.__dict__.values(), item.__dict__.values()))
-        except (KeyError, TypeError):
-            return False
+        return all(s in self._expand() for s in item._expand())
 
     def __ne__(self, other):
         # type: (object) -> bool
@@ -138,6 +180,7 @@ class EcuState(object):
 
     def reset(self):
         # type: () -> None
+        self.__cache__ = None
         keys = list(self.__dict__.keys())
         for k in keys:
             del self.__dict__[k]
@@ -426,17 +469,16 @@ class EcuSession(DefaultSession):
     """
     def __init__(self, *args, **kwargs):
         # type: (Any, Any) -> None
-        DefaultSession.__init__(self, *args, **kwargs)
         self.ecu = Ecu(logging=kwargs.pop("logging", True),
                        verbose=kwargs.pop("verbose", True),
                        store_supported_responses=kwargs.pop("store_supported_responses", True))  # noqa: E501
+        super(EcuSession, self).__init__(*args, **kwargs)
 
-    def on_packet_received(self, pkt):
-        # type: (Optional[Packet]) -> None
+    def process(self, pkt: Packet) -> Optional[Packet]:
         if not pkt:
-            return
+            return None
         self.ecu.update(pkt)
-        DefaultSession.on_packet_received(self, pkt)
+        return pkt
 
 
 class EcuResponse:
@@ -474,7 +516,6 @@ class EcuResponse:
                 state = cast(List[EcuState], state)
                 self.__states = state
             else:
-                state = cast(EcuState, state)
                 self.__states = [state]
 
         if isinstance(responses, PacketList):
@@ -558,9 +599,6 @@ class EcuResponse:
     __hash__ = None  # type: ignore
 
 
-conf.contribs['EcuAnsweringMachine'] = {'send_delay': 0}
-
-
 class EcuAnsweringMachine(AnsweringMachine[PacketList]):
     """AnsweringMachine which emulates the basic behaviour of a real world ECU.
     Provide a list of ``EcuResponse`` objects to configure the behaviour of a
@@ -568,7 +606,7 @@ class EcuAnsweringMachine(AnsweringMachine[PacketList]):
 
     Usage:
         >>> resp = EcuResponse(session=range(0,255), security_level=0, responses=UDS() / UDS_NR(negativeResponseCode=0x7f, requestServiceId=0x10))
-        >>> sock = ISOTPSocket(can_iface, sid=0x700, did=0x600, basecls=UDS)
+        >>> sock = ISOTPSocket(can_iface, tx_id=0x700, rx_id=0x600, basecls=UDS)
         >>> answering_machine = EcuAnsweringMachine(supported_responses=[resp], main_socket=sock, basecls=UDS)
         >>> sim = threading.Thread(target=answering_machine, kwargs={'count': 4, 'timeout':5})
         >>> sim.start()
@@ -599,35 +637,35 @@ class EcuAnsweringMachine(AnsweringMachine[PacketList]):
         :param basecls: Provide a basecls of the used protocol
         :param timeout: Specifies the timeout for sniffing in seconds.
         """
-        self.__main_socket = main_socket  # type: Optional[SuperSocket]
-        self.__sockets = [self.__main_socket]
+        self._main_socket = main_socket  # type: Optional[SuperSocket]
+        self._sockets = [self._main_socket]
 
         if broadcast_socket is not None:
-            self.__sockets.append(broadcast_socket)
+            self._sockets.append(broadcast_socket)
 
-        self.__initial_ecu_state = initial_ecu_state or EcuState(session=1)
-        self.__ecu_state_mutex = Lock()
-        self.reset_state()
+        self._initial_ecu_state = initial_ecu_state or EcuState(session=1)
+        self._ecu_state_mutex = Lock()
+        self._ecu_state = copy.copy(self._initial_ecu_state)
 
-        self.__basecls = basecls  # type: Type[Packet]
-        self.__supported_responses = supported_responses
+        self._basecls = basecls  # type: Type[Packet]
+        self._supported_responses = supported_responses
 
         self.sniff_options["timeout"] = timeout
-        self.sniff_options["opened_socket"] = self.__sockets
+        self.sniff_options["opened_socket"] = self._sockets
 
     @property
     def state(self):
         # type: () -> EcuState
-        return self.__ecu_state
+        return self._ecu_state
 
     def reset_state(self):
         # type: () -> None
-        with self.__ecu_state_mutex:
-            self.__ecu_state = copy.copy(self.__initial_ecu_state)
+        with self._ecu_state_mutex:
+            self._ecu_state = copy.copy(self._initial_ecu_state)
 
     def is_request(self, req):
         # type: (Packet) -> bool
-        return isinstance(req, self.__basecls)
+        return isinstance(req, self._basecls)
 
     def make_reply(self, req):
         # type: (Packet) -> PacketList
@@ -644,29 +682,29 @@ class EcuAnsweringMachine(AnsweringMachine[PacketList]):
         :param req: A request packet
         :return: A list of response packets
         """
-        if self.__supported_responses is not None:
-            for resp in self.__supported_responses:
+        if self._supported_responses is not None:
+            for resp in self._supported_responses:
                 if not isinstance(resp, EcuResponse):
                     raise TypeError("Unsupported type for response. "
                                     "Please use `EcuResponse` objects.")
 
-                with self.__ecu_state_mutex:
-                    if not resp.supports_state(self.__ecu_state):
+                with self._ecu_state_mutex:
+                    if not resp.supports_state(self._ecu_state):
                         continue
 
                     if not resp.answers(req):
                         continue
 
                     EcuState.get_modified_ecu_state(
-                        resp.key_response, req, self.__ecu_state, True)
+                        resp.key_response, req, self._ecu_state, True)
 
                     return resp.responses
 
-        return PacketList([self.__basecls(
+        return PacketList([self._basecls(
             b"\x7f" + bytes(req)[0:1] + b"\x10")])
 
-    def send_reply(self, reply):
-        # type: (PacketList) -> None
+    def send_reply(self, reply, send_function=None):
+        # type: (PacketList, Optional[Any]) -> None
         """
         Sends all Packets of a EcuResponse object. This allows to send multiple
         packets up on a request. If the list contains more than one packet,
@@ -675,8 +713,7 @@ class EcuAnsweringMachine(AnsweringMachine[PacketList]):
         :param reply: List of packets to be sent.
         """
         for p in reply:
-            time.sleep(conf.contribs['EcuAnsweringMachine']['send_delay'])
             if len(reply) > 1:
                 time.sleep(random.uniform(0.01, 0.5))
-            if self.__main_socket:
-                self.__main_socket.send(p)
+            if self._main_socket:
+                self._main_socket.send(p)
